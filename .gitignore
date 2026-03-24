@@ -1,0 +1,51 @@
+# R
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+.Rproj.user/
+renv/
+renv.lock
+packrat/
+*.Rout
+*.Rapp.history
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+env/
+.env
+.env.local
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Shiny / deployment tokens (do not commit secrets)
+rsconnect/
+*.dcf
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE (optional — uncomment if you prefer not to track)
+# .vscode/
+# .idea/
+
+# Logs and temp
+*.log
+*.tmp
+*.temp
+~$*
+
+# Instructions
+Project 2.pdf
