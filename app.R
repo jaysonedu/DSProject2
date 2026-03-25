@@ -592,87 +592,6 @@ feature_engineering_pipeline <- function(
   as.data.frame(df, check.names = FALSE)
 }
 
-make_synthetic_billboard <- function(n = 2000, seed = 42) {
-  set.seed(seed)
-  years <- sample(1950:2015, n, replace = TRUE)
-  energy <- runif(n, 0, 1)
-  loudness <- rnorm(n, mean = -6, sd = 2)
-  valence <- pmin(pmax(energy * 0.6 + runif(n, 0, 0.4), 0), 1)
-  acousticness <- pmin(pmax(1 - energy + rnorm(n, 0, 0.08), 0), 1)
-  instrumentalness <- pmin(pmax(1 - energy + rnorm(n, 0, 0.12), 0), 1)
-  danceability <- runif(n, 0, 1)
-  speechiness <- pmin(pmax(runif(n, 0, 0.6) + (1 - energy) * 0.1, 0), 1)
-  liveness <- runif(n, 0, 1)
-  tempo <- runif(n, 60, 180)
-  time_signature <- sample(3:7, n, replace = TRUE)
-  mode <- sample(0:1, n, replace = TRUE)
-
-  artist_pool <- c("Carpenters", "Patti Page", "Bon Jovi", "Maroon 5", "Erasure", "En Vogue")
-  genre_pool <- c("jazz, pop, swing", "country, pop", "rock", "disco", "synthpop", "r&b")
-  artists <- sample(artist_pool, n, replace = TRUE)
-  title_pool <- c("Always", "Superstar", "Animals", "Hold On", "Don't Be Cruel", "I Wanna Be Loved")
-  titles <- sample(title_pool, n, replace = TRUE)
-  genre_tags <- sample(genre_pool, n, replace = TRUE)
-
-  position <- pmin(pmax(round(runif(n, 1, 100)), 1), 100)
-  id <- paste0("track_", sample(1:floor(n * 0.9), n, replace = TRUE))
-  id[sample(1:n, floor(n * 0.06))] <- NA
-
-  dup_n <- floor(n * 0.01)
-  if (dup_n > 0) {
-    chosen <- sample(setdiff(1:n, which(is.na(id))), dup_n, replace = FALSE)
-    target_id <- id[chosen[1]]
-    id[chosen] <- target_id
-    if (length(chosen) >= 3) {
-      position[chosen[1]] <- 5
-      position[chosen[2]] <- 25
-      position[chosen[3]] <- 70
-    }
-  }
-
-  z <- 3.0 * energy + 0.4 * valence + 0.35 * (loudness + 6) - 2.2 * acousticness - 0.3 * instrumentalness
-  prob <- 1 / (1 + exp(-z + 0.5))
-  hit <- rbinom(n, 1, prob)
-  explicit <- rbinom(n, 1, 0.15)
-  explicit[sample(1:n, floor(n * 0.03))] <- NA
-
-  df <- data.frame(
-    year = years,
-    position = position,
-    title = titles,
-    artists = artists,
-    pos_sentiment = pmin(pmax(runif(n, 0, 1) * (0.4 + energy * 0.7), 0), 1),
-    neg_sentiment = pmin(pmax(runif(n, 0, 1) * (0.4 + acousticness * 0.6), 0), 1),
-    genre_tags = genre_tags,
-    id = id,
-    popularity = pmin(pmax(round(runif(n, 10, 100) + hit * 15), 0), 100),
-    duration_ms = round(runif(n, 140000, 240000)),
-    explicit = explicit,
-    id_artists = paste0("artist_", match(artists, artist_pool)),
-    danceability = danceability,
-    energy = energy,
-    key = sample(0:11, n, replace = TRUE),
-    loudness = loudness,
-    mode = mode,
-    speechiness = speechiness,
-    acousticness = acousticness,
-    instrumentalness = instrumentalness,
-    liveness = liveness,
-    valence = valence,
-    tempo = tempo,
-    time_signature = time_signature,
-    hit = hit
-  )
-
-  numeric_cols <- names(df)[sapply(df, is.numeric)]
-  for (nm in numeric_cols) {
-    idx <- sample.int(n, floor(n * 0.05))
-    df[idx, nm] <- NA
-  }
-  df$genre_tags[sample.int(n, floor(n * 0.1))] <- NA
-  df
-}
-
 dataset_info <- function(df) {
   data.frame(
     Metric = c("Number of Rows", "Number of Columns", "Numeric Variables", "Categorical Variables"),
@@ -980,7 +899,7 @@ ui <- page_navbar(
               ),
               tags$p(
                 class = "small mb-0",
-                "Or use Bank Marketing, Titanic, or synthetic Billboard demo data (see ",
+                "Or use Bank Marketing or Titanic (see ",
                 tags$code("data/"), ")."
               )
             )),
@@ -1043,10 +962,10 @@ ui <- page_navbar(
           radioButtons(
             "data_source",
             "Data source",
-            choices = c("Upload file" = "upload", "Built-in / synthetic" = "builtin"),
+            choices = c("Upload file" = "upload", "Built-in dataset" = "builtin"),
             selected = "upload"
           ),
-          "Switch between your own file and built-in or synthetic demo data."
+          "Switch between your own file and built-in datasets in data/."
         ),
         conditionalPanel(
           condition = "input.data_source == 'upload'",
@@ -1067,11 +986,10 @@ ui <- page_navbar(
               "Dataset",
               choices = c(
                 "Bank Marketing (data/bank-full.csv)" = "bank",
-                "Titanic (data/titanic.csv)" = "titanic",
-                "Synthetic Billboard (demo)" = "synthetic"
+                "Titanic (data/titanic.csv)" = "titanic"
               )
             ),
-            "Bank & Titanic require files in the data/ folder. Synthetic needs no files."
+            "Both options require the corresponding CSV in the data/ folder."
           )
         ),
         ti(
@@ -1516,9 +1434,7 @@ server <- function(input, output, session) {
       read_uploaded_data(input$upload$datapath, input$upload$name)
     } else {
       ch <- input$builtin_choice
-      if (ch == "synthetic") {
-        make_synthetic_billboard()
-      } else if (ch == "bank") {
+      if (ch == "bank") {
         p <- file.path(data_dir, "bank-full.csv")
         shiny::validate(
           shiny::need(file.exists(p), "Missing data/bank-full.csv — add it under the data/ folder.")
@@ -2017,7 +1933,7 @@ server <- function(input, output, session) {
     }
     ti(
       sliderInput("year_range", "Year range", min = min(yr), max = max(yr), value = c(min(yr), max(yr))),
-      "Restrict EDA to a range of years (e.g. Billboard-style data)."
+      "Restrict EDA when the table has a numeric year column."
     )
   })
 

@@ -1,12 +1,13 @@
-# Project 2 — Shiny data explorer
+# ADS Project 2 — Data workflow app (R Shiny)
 
-Course project for *Web Application Development and Deployment*. This repo is an R Shiny app for loading data, cleaning it, adding a few engineered features, exploring it with plots, and exporting CSVs.
+Course project: an **R Shiny** app (**ADS Project 2**) for ingesting tabular data, cleaning and imputing, engineering features, interactive EDA with Plotly, and exporting CSVs. The UI uses a **noir / monochrome** theme (bslib), with **tooltips** on controls and **separate card** panels so tables and plots do not overlap.
 
-## Running the main app
+## Requirements
 
-Use R 4.x with the working directory set to this folder (RStudio: open `app.R` and click **Run App**, or use the terminal from the project root).
+- **R 4.x**
+- Working directory = this project folder when you run the app.
 
-Install packages once:
+## Install packages
 
 ```r
 install.packages(c(
@@ -15,31 +16,62 @@ install.packages(c(
 ))
 ```
 
-Then:
+## Run locally
+
+In RStudio, open `app.R` and click **Run App**, or from the project root:
 
 ```r
 shiny::runApp("app.R")
 ```
 
-`Rscript` works too if R is on your PATH:
+With R on your PATH:
 
 ```bash
 Rscript -e "shiny::runApp('app.R', launch.browser = TRUE)"
 ```
 
-Built-in datasets expect `data/bank-full.csv` and `data/titanic.csv`. You can also use the synthetic “Billboard” option in the app, which needs no files.
+The browser window title is **“ADS Project 2”**.
 
-## What’s in the repo
+## App workflow (tabs)
+
+| Tab | What it does |
+|-----|----------------|
+| **Guide** | Short overview of the pipeline and controls. |
+| **Upload & preview** | Load data from a file or from built-ins; dataset snapshot, preview, column types & missingness, `summary()`. |
+| **Cleaning** | Placeholders → NA, numeric coercion, sparse columns, missing-value strategies, duplicates, **id + position** handling for chart-style rows, IQR outliers, z-score scaling, optional label encoding. |
+| **Features** | Large **feature engineering** menu (dates, bins, logs, ratios, ranks, group means, Titanic/bank shortcuts, etc.); preview and distribution of first new column. |
+| **EDA** | **Apply EDA** applies filters (hit, year, optional numeric range, optional category level) and refreshes tables and charts. Numeric **describe**-style summary, missingness table, **Pearson correlation matrix** (table), Plotly plots (histogram, scatter with optional group/color, boxplot, bar counts, correlation heatmap). |
+| **Export** | Download cleaned and **featured** CSVs (UTF-8). |
+
+## Data sources
+
+**Upload** supports CSV/TXT (comma, semicolon, or tab), Excel (`.xlsx`/`.xls`), **JSON** (table-shaped arrays, wrapped objects, or JSON Lines), and **RDS**.
+
+**Built-in** datasets (files must exist under `data/`):
+
+- `data/bank-full.csv` — Bank Marketing (semicolon-separated)
+- `data/titanic.csv` — Titanic
+
+There is **no** synthetic/demo generator; both built-ins need the corresponding CSV.
+
+## Technical notes
+
+- **JSON**: Loaded by reading the file as UTF-8 text (avoids path/encoding edge cases), with optional BOM strip, single-key unwrapping (e.g. `{"data":[...]}`), and **JSON Lines** fallback.
+- **EDA behavior**: Matches the spirit of the reference Python app in `EDA.py` (filters + describe + missingness + correlation table + grouped scatter/boxplots), with extra R features (Plotly, `hit`/`year` filters, correlation heatmap). Until the first **Apply EDA** click, the EDA views use the full featured table; after that, filters refresh only when you click **Apply EDA** again.
+- **Deployment** (e.g. [shinyapps.io](https://www.shinyapps.io)): use `rsconnect::deployApp()` with `appPrimaryDoc = "app.R"`. **Do not commit API tokens or secrets**; configure `rsconnect` via the documented account workflow or environment variables, not hard-coded keys in the repo.
+
+## Repo layout
 
 | Path | Notes |
 |------|--------|
-| `app.R` | Main app: upload or built-ins, cleaning, feature engineering, Plotly EDA, export. |
-| `data/` | Bank marketing (`bank-full.csv`, semicolon-separated) and Titanic (`titanic.csv`) for built-ins. |
-| `app5.R` | Older R version — upload and cleaning only. |
-| `draft.R` | Older full R draft; `app.R` is the one to run. |
-| `app.py` | Python Shiny app — upload and cleaning only; not the full workflow. |
-| `EDA.ipynb` | Notebook used to generate/edit Python Shiny code. |
+| `app.R` | **Main application** — full pipeline, noir UI, cards per table. |
+| `data/` | `bank-full.csv`, `titanic.csv` for built-in loading. |
+| `setup_shinyapps.R` | Example deploy script — **rotate credentials** if this file ever contained live tokens and use a safe pattern going forward. |
+| `EDA.py` | Reference / notebook export for the original Python Shiny specification (full script content may live in your notebook). |
+| `app.py` | Python Shiny variant (scope may differ from `app.R`). |
+| `app5.R`, `draft.R` | Older or partial R drafts; use **`app.R`** for the current app. |
+| `EDA.ipynb` | Notebook tied to Python workflow. |
 
 ## Hand-in (course)
 
-The assignment asks for a short report, a deployed app link (e.g. shinyapps.io), and this repo with runnable code. Put the live URL and team contribution notes in the report; check Courseworks for the current deadline.
+The assignment typically asks for a short report, a **deployed app** URL (e.g. shinyapps.io), and this repo with runnable code. Put the live URL and team contribution notes in the report; follow Courseworks for deadlines.
