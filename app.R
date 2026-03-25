@@ -840,6 +840,35 @@ app_head <- tags$head(
     .table-slot-card .dataTables_wrapper { width: 100% !important; }
     .main-panel-stack { display: flex; flex-direction: column; gap: 0; }
     .main-panel-stack > .row { margin-bottom: 1.35rem; }
+    /* Feature tab: collapsible sections */
+    .feature-sidebar .accordion { --bs-accordion-border-color: rgba(255,255,255,.12); }
+    .feature-sidebar .accordion-item {
+      background: #0f0f0f !important;
+      border: 1px solid rgba(255,255,255,.12) !important;
+      margin-bottom: 0.45rem;
+      border-radius: 0.5rem !important;
+      overflow: hidden;
+    }
+    .feature-sidebar .accordion-button {
+      background: rgba(255,255,255,.06) !important;
+      color: #fafafa !important;
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      padding: 0.55rem 0.9rem;
+      box-shadow: none !important;
+    }
+    .feature-sidebar .accordion-button:not(.collapsed) {
+      background: rgba(255,255,255,.11) !important;
+      color: #ffffff !important;
+    }
+    .feature-sidebar .accordion-button::after { filter: invert(1) grayscale(1); opacity: 0.65; }
+    .feature-sidebar .accordion-body {
+      background: #0a0a0a;
+      padding: 0.65rem 0.9rem 0.85rem;
+      border-top: 1px solid rgba(255,255,255,.08);
+    }
+    .feature-sidebar .accordion-body > .shiny-input-container:last-child { margin-bottom: 0; }
   "))
 )
 
@@ -916,7 +945,7 @@ ui <- page_navbar(
             column(4, guide_step_card(
               "3",
               "Feature engineering",
-              tags$p(class = "small mb-2", "Rich transforms: date parts, age tiers, ratios, ranks, encodings, and Titanic/bank shortcuts."),
+              tags$p(class = "small mb-2", "Rich transforms are grouped in expandable sections on the Features tab."),
               tags$p(class = "small mb-0", style = "color: rgba(255,255,255,.5);", "Run Apply features after changing options.")
             ))
           ),
@@ -1168,80 +1197,87 @@ ui <- page_navbar(
         width = 3,
         class = "feature-sidebar",
         tags$div(class = "section-pill", "Transforms"),
-        tags$h5("Generic features"),
-        ti(
-          checkboxInput("create_date_parts", "Date → year, month, day, weekday, quarter, weekend flag", FALSE),
-          "Parses a chosen date/datetime column and adds calendar parts."
+        tags$p(
+          class = "small",
+          style = "color: rgba(255,255,255,.5); margin-bottom: .75rem;",
+          "Expand a section to turn on options. Several sections can be open at once."
         ),
-        uiOutput("date_var_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_age_group", "Age bands (Young / Adult / Middle / Senior)", FALSE), "Needs a numeric age column."),
-        uiOutput("age_var_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_balance_level", "Balance → Low / Medium / High (tertiles)", FALSE), "Needs a numeric balance-like column."),
-        uiOutput("balance_var_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_contacted_before", "contacted_before from pdays (Yes/No)", FALSE), "Treats NA pdays like -1 (not contacted)."),
-        uiOutput("pdays_var_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_log_feature", "log1p on chosen numeric column", FALSE), "Requires non-negative values."),
-        uiOutput("log_var_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_sqrt_feature", "sqrt on chosen numeric column", FALSE), ""),
-        uiOutput("sqrt_var_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_square_feature", "Square a numeric column", FALSE), ""),
-        uiOutput("square_var_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_ratio_feature", "Ratio of two numeric columns", FALSE), "Denominator zeros become NA."),
-        uiOutput("ratio_vars_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_sum_feature", "Sum of two numeric columns", FALSE), ""),
-        uiOutput("sum_vars_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_diff_feature", "Difference of two numeric columns", FALSE), ""),
-        uiOutput("diff_vars_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_product_feature", "Product of two numeric columns", FALSE), ""),
-        uiOutput("prod_vars_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_indicator_feature", "Indicator: 1 if value > threshold", FALSE), ""),
-        uiOutput("indicator_var_ui"),
-        uiOutput("indicator_threshold_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_missing_indicator", "Missingness indicator (0/1)", FALSE), ""),
-        uiOutput("missing_var_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_frequency_feature", "Category frequency count", FALSE), "Count of each level across the full column."),
-        uiOutput("freq_var_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_group_mean_feature", "Group mean of numeric target", FALSE), "Mean of target within each group level."),
-        uiOutput("group_var_ui"),
-        uiOutput("target_var_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_rank_feature", "Rank a numeric column", FALSE), ""),
-        uiOutput("rank_var_ui"),
-        tags$hr(),
-        ti(checkboxInput("create_text_length", "Character length of a column", FALSE), ""),
-        uiOutput("text_var_ui"),
-        tags$hr(),
-        tags$div(class = "section-pill", "Shortcuts"),
-        tags$h5("When columns exist"),
-        ti(
-          checkboxInput("add_family_size", "Family size (SibSp + Parch + 1)", TRUE),
-          "Titanic-style derived column."
+        bslib::accordion(
+          id = "feat_accordion",
+          class = "mb-2",
+          multiple = TRUE,
+          open = "feat_shortcuts",
+          bslib::accordion_panel(
+            value = "feat_shortcuts",
+            title = "Shortcuts (Titanic / bank)",
+            ti(
+              checkboxInput("add_family_size", "Family size (SibSp + Parch + 1)", TRUE),
+              "Titanic-style derived column."
+            ),
+            ti(
+              checkboxInput("add_log_time_price", "log1p(Fare) / log1p(duration) auto", TRUE),
+              "Adds log_fare / log_duration when those columns exist."
+            ),
+            ti(
+              checkboxInput("add_campaign_prev_ratio", "campaign / (previous + 1)", FALSE),
+              "Bank marketing style ratio."
+            )
+          ),
+          bslib::accordion_panel(
+            value = "feat_dates",
+            title = "Dates, age & balance",
+            ti(
+              checkboxInput("create_date_parts", "Date → year, month, day, weekday, quarter, weekend flag", FALSE),
+              "Parses a chosen date/datetime column and adds calendar parts."
+            ),
+            uiOutput("date_var_ui"),
+            ti(checkboxInput("create_age_group", "Age bands (Young / Adult / Middle / Senior)", FALSE), "Needs a numeric age column."),
+            uiOutput("age_var_ui"),
+            ti(checkboxInput("create_balance_level", "Balance → Low / Medium / High (tertiles)", FALSE), "Needs a numeric balance-like column."),
+            uiOutput("balance_var_ui"),
+            ti(checkboxInput("create_contacted_before", "contacted_before from pdays (Yes/No)", FALSE), "Treats NA pdays like -1 (not contacted)."),
+            uiOutput("pdays_var_ui")
+          ),
+          bslib::accordion_panel(
+            value = "feat_math",
+            title = "Numeric transforms",
+            ti(checkboxInput("create_log_feature", "log1p on chosen numeric column", FALSE), "Requires non-negative values."),
+            uiOutput("log_var_ui"),
+            ti(checkboxInput("create_sqrt_feature", "sqrt on chosen numeric column", FALSE), ""),
+            uiOutput("sqrt_var_ui"),
+            ti(checkboxInput("create_square_feature", "Square a numeric column", FALSE), ""),
+            uiOutput("square_var_ui"),
+            ti(checkboxInput("create_ratio_feature", "Ratio of two numeric columns", FALSE), "Denominator zeros become NA."),
+            uiOutput("ratio_vars_ui"),
+            ti(checkboxInput("create_sum_feature", "Sum of two numeric columns", FALSE), ""),
+            uiOutput("sum_vars_ui"),
+            ti(checkboxInput("create_diff_feature", "Difference of two numeric columns", FALSE), ""),
+            uiOutput("diff_vars_ui"),
+            ti(checkboxInput("create_product_feature", "Product of two numeric columns", FALSE), ""),
+            uiOutput("prod_vars_ui")
+          ),
+          bslib::accordion_panel(
+            value = "feat_extra",
+            title = "Indicators, frequency & text",
+            ti(checkboxInput("create_indicator_feature", "Indicator: 1 if value > threshold", FALSE), ""),
+            uiOutput("indicator_var_ui"),
+            uiOutput("indicator_threshold_ui"),
+            ti(checkboxInput("create_missing_indicator", "Missingness indicator (0/1)", FALSE), ""),
+            uiOutput("missing_var_ui"),
+            ti(checkboxInput("create_frequency_feature", "Category frequency count", FALSE), "Count of each level across the full column."),
+            uiOutput("freq_var_ui"),
+            ti(checkboxInput("create_group_mean_feature", "Group mean of numeric target", FALSE), "Mean of target within each group level."),
+            uiOutput("group_var_ui"),
+            uiOutput("target_var_ui"),
+            ti(checkboxInput("create_rank_feature", "Rank a numeric column", FALSE), ""),
+            uiOutput("rank_var_ui"),
+            ti(checkboxInput("create_text_length", "Character length of a column", FALSE), ""),
+            uiOutput("text_var_ui")
+          )
         ),
-        ti(
-          checkboxInput("add_log_time_price", "log1p(Fare) / log1p(duration) auto", TRUE),
-          "Adds log_fare / log_duration when those columns exist."
-        ),
-        ti(
-          checkboxInput("add_campaign_prev_ratio", "campaign / (previous + 1)", FALSE),
-          "Bank marketing style ratio."
-        ),
         tags$hr(),
         ti(
-          actionButton("feat_btn", "Apply features", class = "btn-primary"),
+          actionButton("feat_btn", "Apply features", class = "btn-primary w-100"),
           "Recompute from the cleaned table after changing options."
         )
       ),
