@@ -592,6 +592,71 @@ feature_engineering_pipeline <- function(
   as.data.frame(df, check.names = FALSE)
 }
 
+apply_one_click_transform <- function(df, col, method) {
+  df <- as.data.frame(df, check.names = FALSE)
+  if (!col %in% names(df)) return(df)
+  method <- match.arg(method, c(
+    "log", "sqrt", "square", "rank", "missing", "text_length", "frequency", "zscore"
+  ))
+  switch(method,
+    log = {
+      if (!is.numeric(df[[col]])) return(df)
+      x <- df[[col]]
+      ok <- stats::na.omit(x)
+      if (length(ok) && all(ok >= 0)) df[[paste0(col, "_log")]] <- log1p(x)
+    },
+    sqrt = {
+      if (!is.numeric(df[[col]])) return(df)
+      x <- df[[col]]
+      ok <- stats::na.omit(x)
+      if (length(ok) && all(ok >= 0)) df[[paste0(col, "_sqrt")]] <- sqrt(x)
+    },
+    square = {
+      if (!is.numeric(df[[col]])) return(df)
+      df[[paste0(col, "_sq")]] <- df[[col]]^2
+    },
+    rank = {
+      if (!is.numeric(df[[col]])) return(df)
+      df[[paste0(col, "_rank")]] <- rank(df[[col]], ties.method = "average", na.last = "keep")
+    },
+    missing = {
+      df[[paste0(col, "_missing")]] <- as.integer(is.na(df[[col]]))
+    },
+    text_length = {
+      df[[paste0(col, "_length")]] <- nchar(as.character(df[[col]]), type = "chars", allowNA = TRUE)
+    },
+    frequency = {
+      fv <- df[[col]]
+      ux <- unique(fv)
+      cnt <- vapply(ux, function(u) sum(fv == u | (is.na(fv) & is.na(u))), numeric(1))
+      df[[paste0(col, "_freq")]] <- cnt[match(fv, ux)]
+    },
+    zscore = {
+      if (!is.numeric(df[[col]])) return(df)
+      x <- df[[col]]
+      s <- stats::sd(x, na.rm = TRUE)
+      if (!is.na(s) && s > 0) df[[paste0(col, "_z")]] <- as.numeric(scale(x))
+    }
+  )
+  as.data.frame(df, check.names = FALSE)
+}
+
+extract_datetime_selected <- function(df, col, year, month, day, weekday, quarter) {
+  df <- as.data.frame(df, check.names = FALSE)
+  if (!col %in% names(df)) return(df)
+  if (!isTRUE(year) && !isTRUE(month) && !isTRUE(day) && !isTRUE(weekday) && !isTRUE(quarter)) return(df)
+  dt_raw <- suppressWarnings(as.POSIXlt(as.character(df[[col]]), tz = "UTC"))
+  if (all(is.na(as.POSIXct(dt_raw)))) return(df)
+  d_date <- as.Date(dt_raw)
+  mon <- dt_raw$mon + 1L
+  if (isTRUE(year)) df[[paste0(col, "_year")]] <- dt_raw$year + 1900L
+  if (isTRUE(month)) df[[paste0(col, "_month")]] <- mon
+  if (isTRUE(day)) df[[paste0(col, "_day")]] <- dt_raw$mday
+  if (isTRUE(weekday)) df[[paste0(col, "_weekday")]] <- weekdays(d_date)
+  if (isTRUE(quarter)) df[[paste0(col, "_quarter")]] <- as.integer((mon - 1L) %/% 3L + 1L)
+  as.data.frame(df, check.names = FALSE)
+}
+
 dataset_info <- function(df) {
   data.frame(
     Metric = c("Number of Rows", "Number of Columns", "Numeric Variables", "Categorical Variables"),
@@ -869,6 +934,44 @@ app_head <- tags$head(
       border-top: 1px solid rgba(255,255,255,.08);
     }
     .feature-sidebar .accordion-body > .shiny-input-container:last-child { margin-bottom: 0; }
+    /* Features tab — mockup-style blue accordions */
+    .feat-mock-accordion { --bs-accordion-border-color: rgba(59,130,246,.35); }
+    .feat-mock-accordion .accordion-item {
+      background: #0c1624 !important;
+      border: 1px solid rgba(59,130,246,.25) !important;
+      margin-bottom: 0.5rem;
+      border-radius: 0.45rem !important;
+      overflow: hidden;
+    }
+    .feat-mock-accordion .accordion-button {
+      background: linear-gradient(180deg, #1e3a5f 0%, #172554 100%) !important;
+      color: #93c5fd !important;
+      font-size: 0.88rem;
+      font-weight: 600;
+      padding: 0.6rem 1rem;
+      box-shadow: none !important;
+    }
+    .feat-mock-accordion .accordion-button:not(.collapsed) {
+      background: linear-gradient(180deg, #1d4ed8 0%, #1e3a8a 100%) !important;
+      color: #ffffff !important;
+    }
+    .feat-mock-accordion .accordion-button::after { filter: none; opacity: 0.9; }
+    .feat-mock-accordion .accordion-body {
+      background: #0a1020;
+      padding: 0.75rem 1rem 1rem;
+      border-top: 1px solid rgba(59,130,246,.2);
+    }
+    .feat-mock-accordion .btn-primary {
+      margin-top: 0.5rem;
+      background: #2563eb !important;
+      color: #fff !important;
+      border-color: #3b82f6 !important;
+    }
+    .feat-mock-accordion .btn-primary:hover {
+      background: #1d4ed8 !important;
+      border-color: #60a5fa !important;
+      color: #fff !important;
+    }
   "))
 )
 
@@ -945,8 +1048,8 @@ ui <- page_navbar(
             column(4, guide_step_card(
               "3",
               "Feature engineering",
-              tags$p(class = "small mb-2", "Rich transforms are grouped in expandable sections on the Features tab."),
-              tags$p(class = "small mb-0", style = "color: rgba(255,255,255,.5);", "Run Apply features after changing options.")
+              tags$p(class = "small mb-2", "Features: one-click transforms and datetime extraction (plus advanced options)."),
+              tags$p(class = "small mb-0", style = "color: rgba(255,255,255,.5);", "Apply each section’s button to update the engineered table.")
             ))
           ),
           fluidRow(
@@ -1200,85 +1303,100 @@ ui <- page_navbar(
         tags$p(
           class = "small",
           style = "color: rgba(255,255,255,.5); margin-bottom: .75rem;",
-          "Expand a section to turn on options. Several sections can be open at once."
+          "Pick a column and action, then use the blue buttons inside each section. Cleaning resets the engineered table."
         ),
         bslib::accordion(
           id = "feat_accordion",
-          class = "mb-2",
+          class = "mb-2 feat-mock-accordion",
           multiple = TRUE,
-          open = "feat_shortcuts",
+          open = c("feat_oct", "feat_dt"),
           bslib::accordion_panel(
-            value = "feat_shortcuts",
-            title = "Shortcuts (Titanic / bank)",
+            value = "feat_oct",
+            title = "One-Click Transforms",
+            uiOutput("oct_col_ui"),
+            selectInput(
+              "oct_method",
+              "Method",
+              choices = c(
+                "Log" = "log",
+                "Square root" = "sqrt",
+                "Square" = "square",
+                "Rank" = "rank",
+                "Missing indicator (0/1)" = "missing",
+                "Text length" = "text_length",
+                "Category frequency" = "frequency",
+                "Z-score (standardize)" = "zscore"
+              ),
+              selected = "log"
+            ),
+            actionButton("oct_apply_btn", "Apply Transform", class = "btn-primary w-100")
+          ),
+          bslib::accordion_panel(
+            value = "feat_dt",
+            title = "Datetime Extraction",
+            uiOutput("dt_col_ui"),
+            tags$label(class = "form-label mb-1", style = "color:#a3a3a3;", "Extract"),
+            checkboxInput("dt_ext_year", "Year", TRUE),
+            checkboxInput("dt_ext_month", "Month", TRUE),
+            checkboxInput("dt_ext_day", "Day", TRUE),
+            checkboxInput("dt_ext_weekday", "Weekday", TRUE),
+            checkboxInput("dt_ext_quarter", "Quarter", TRUE),
+            actionButton("dt_extract_btn", "Extract", class = "btn-primary w-100")
+          ),
+          bslib::accordion_panel(
+            value = "feat_adv",
+            title = "Advanced & shortcuts",
             ti(
               checkboxInput("add_family_size", "Family size (SibSp + Parch + 1)", TRUE),
-              "Titanic-style derived column."
+              "Titanic-style column when SibSp & Parch exist."
             ),
             ti(
               checkboxInput("add_log_time_price", "log1p(Fare) / log1p(duration) auto", TRUE),
-              "Adds log_fare / log_duration when those columns exist."
+              "Adds log_fare / log_duration when present."
             ),
             ti(
               checkboxInput("add_campaign_prev_ratio", "campaign / (previous + 1)", FALSE),
-              "Bank marketing style ratio."
-            )
-          ),
-          bslib::accordion_panel(
-            value = "feat_dates",
-            title = "Dates, age & balance",
-            ti(
-              checkboxInput("create_date_parts", "Date → year, month, day, weekday, quarter, weekend flag", FALSE),
-              "Parses a chosen date/datetime column and adds calendar parts."
+              "Bank-style ratio when columns exist."
             ),
-            uiOutput("date_var_ui"),
-            ti(checkboxInput("create_age_group", "Age bands (Young / Adult / Middle / Senior)", FALSE), "Needs a numeric age column."),
-            uiOutput("age_var_ui"),
-            ti(checkboxInput("create_balance_level", "Balance → Low / Medium / High (tertiles)", FALSE), "Needs a numeric balance-like column."),
-            uiOutput("balance_var_ui"),
-            ti(checkboxInput("create_contacted_before", "contacted_before from pdays (Yes/No)", FALSE), "Treats NA pdays like -1 (not contacted)."),
-            uiOutput("pdays_var_ui")
-          ),
-          bslib::accordion_panel(
-            value = "feat_math",
-            title = "Numeric transforms",
-            ti(checkboxInput("create_log_feature", "log1p on chosen numeric column", FALSE), "Requires non-negative values."),
-            uiOutput("log_var_ui"),
-            ti(checkboxInput("create_sqrt_feature", "sqrt on chosen numeric column", FALSE), ""),
-            uiOutput("sqrt_var_ui"),
-            ti(checkboxInput("create_square_feature", "Square a numeric column", FALSE), ""),
-            uiOutput("square_var_ui"),
-            ti(checkboxInput("create_ratio_feature", "Ratio of two numeric columns", FALSE), "Denominator zeros become NA."),
-            uiOutput("ratio_vars_ui"),
-            ti(checkboxInput("create_sum_feature", "Sum of two numeric columns", FALSE), ""),
-            uiOutput("sum_vars_ui"),
-            ti(checkboxInput("create_diff_feature", "Difference of two numeric columns", FALSE), ""),
-            uiOutput("diff_vars_ui"),
-            ti(checkboxInput("create_product_feature", "Product of two numeric columns", FALSE), ""),
-            uiOutput("prod_vars_ui")
-          ),
-          bslib::accordion_panel(
-            value = "feat_extra",
-            title = "Indicators, frequency & text",
+            tags$hr(),
+            selectInput(
+              "banding_feature",
+              "Bands / levels",
+              choices = c(
+                "None" = "none",
+                "Age bands (Young / Adult / Middle / Senior)" = "age_group",
+                "Balance level (Low / Medium / High)" = "balance_level"
+              ),
+              selected = "none"
+            ),
+            uiOutput("banding_var_ui"),
+            ti(checkboxInput("create_contacted_before", "contacted_before from pdays", FALSE), ""),
+            uiOutput("pdays_var_ui"),
+            tags$hr(),
+            selectInput(
+              "arith_feature",
+              "Two-column arithmetic",
+              choices = c(
+                "None" = "none",
+                "Ratio of two numeric columns" = "ratio",
+                "Sum of two numeric columns" = "sum",
+                "Difference of two numeric columns" = "diff",
+                "Product of two numeric columns" = "product"
+              ),
+              selected = "none"
+            ),
+            uiOutput("arith_vars_ui"),
+            tags$hr(),
             ti(checkboxInput("create_indicator_feature", "Indicator: 1 if value > threshold", FALSE), ""),
             uiOutput("indicator_var_ui"),
             uiOutput("indicator_threshold_ui"),
-            ti(checkboxInput("create_missing_indicator", "Missingness indicator (0/1)", FALSE), ""),
-            uiOutput("missing_var_ui"),
-            ti(checkboxInput("create_frequency_feature", "Category frequency count", FALSE), "Count of each level across the full column."),
-            uiOutput("freq_var_ui"),
-            ti(checkboxInput("create_group_mean_feature", "Group mean of numeric target", FALSE), "Mean of target within each group level."),
+            tags$hr(),
+            ti(checkboxInput("create_group_mean_feature", "Group mean of numeric target", FALSE), ""),
             uiOutput("group_var_ui"),
             uiOutput("target_var_ui"),
-            ti(checkboxInput("create_rank_feature", "Rank a numeric column", FALSE), ""),
-            uiOutput("rank_var_ui"),
-            ti(checkboxInput("create_text_length", "Character length of a column", FALSE), ""),
-            uiOutput("text_var_ui")
+            tags$hr(),
+            actionButton("feat_btn", "Apply advanced options", class = "btn-primary w-100")
           )
-        ),
-        tags$hr(),
-        ti(
-          actionButton("feat_btn", "Apply features", class = "btn-primary w-100"),
-          "Recompute from the cleaned table after changing options."
         )
       ),
       mainPanel(
@@ -1572,6 +1690,118 @@ server <- function(input, output, session) {
     )
   }, ignoreNULL = TRUE)
 
+  feat_accum <- reactiveVal(NULL)
+
+  observeEvent(input$clean_btn, {
+    feat_accum(NULL)
+  }, priority = 1)
+
+  observeEvent(input$load_btn, {
+    feat_accum(NULL)
+  }, priority = 1)
+
+  featured_data <- reactive({
+    req(cleaned_data())
+    acc <- feat_accum()
+    if (is.null(acc)) cleaned_data() else acc
+  })
+
+  observeEvent(input$oct_apply_btn, {
+    req(cleaned_data(), input$oct_col, input$oct_method)
+    base <- if (is.null(isolate(feat_accum()))) cleaned_data() else isolate(feat_accum())
+    shiny::validate(shiny::need(input$oct_col %in% names(base), "Choose a valid column."))
+    out <- apply_one_click_transform(base, input$oct_col, input$oct_method)
+    if (identical(out, base)) {
+      showNotification("Transform could not be applied (check column type vs method).", type = "warning", duration = 4)
+      return(invisible(NULL))
+    }
+    feat_accum(out)
+    showNotification("Transform applied.", type = "message", duration = 2)
+  })
+
+  observeEvent(input$dt_extract_btn, {
+    req(cleaned_data(), input$dt_col)
+    base <- if (is.null(isolate(feat_accum()))) cleaned_data() else isolate(feat_accum())
+    shiny::validate(shiny::need(input$dt_col %in% names(base), "Choose a datetime column."))
+    out <- extract_datetime_selected(
+      base,
+      input$dt_col,
+      year = isTRUE(input$dt_ext_year),
+      month = isTRUE(input$dt_ext_month),
+      day = isTRUE(input$dt_ext_day),
+      weekday = isTRUE(input$dt_ext_weekday),
+      quarter = isTRUE(input$dt_ext_quarter)
+    )
+    if (identical(out, base)) {
+      showNotification("No datetime parts added (check parsing or select at least one Extract option).", type = "warning", duration = 4)
+      return(invisible(NULL))
+    }
+    feat_accum(out)
+    showNotification("Datetime features extracted.", type = "message", duration = 2)
+  })
+
+  observeEvent(input$feat_btn, {
+    req(cleaned_data())
+    base <- if (is.null(isolate(feat_accum()))) cleaned_data() else isolate(feat_accum())
+    banding_choice <- if (is.null(input$banding_feature)) "none" else input$banding_feature
+    arith_choice <- if (is.null(input$arith_feature)) "none" else input$arith_feature
+    thr <- NULL
+    if (isTRUE(input$create_indicator_feature) && !is.null(input$indicator_threshold)) {
+      thr <- suppressWarnings(as.numeric(input$indicator_threshold))
+    }
+    d <- feature_engineering_pipeline(
+      base,
+      create_date_parts = FALSE,
+      date_var = NULL,
+      create_age_group = identical(banding_choice, "age_group"),
+      age_var = if (identical(banding_choice, "age_group")) input$banding_var else NULL,
+      create_balance_level = identical(banding_choice, "balance_level"),
+      balance_var = if (identical(banding_choice, "balance_level")) input$banding_var else NULL,
+      create_contacted_before = isTRUE(input$create_contacted_before),
+      pdays_var = if (isTRUE(input$create_contacted_before)) input$pdays_var else NULL,
+      create_log_feature = FALSE,
+      log_var = NULL,
+      create_sqrt_feature = FALSE,
+      sqrt_var = NULL,
+      create_square_feature = FALSE,
+      square_var = NULL,
+      create_ratio_feature = identical(arith_choice, "ratio"),
+      ratio_num = if (identical(arith_choice, "ratio")) input$arith_var1 else NULL,
+      ratio_den = if (identical(arith_choice, "ratio")) input$arith_var2 else NULL,
+      create_sum_feature = identical(arith_choice, "sum"),
+      sum_var1 = if (identical(arith_choice, "sum")) input$arith_var1 else NULL,
+      sum_var2 = if (identical(arith_choice, "sum")) input$arith_var2 else NULL,
+      create_diff_feature = identical(arith_choice, "diff"),
+      diff_var1 = if (identical(arith_choice, "diff")) input$arith_var1 else NULL,
+      diff_var2 = if (identical(arith_choice, "diff")) input$arith_var2 else NULL,
+      create_product_feature = identical(arith_choice, "product"),
+      prod_var1 = if (identical(arith_choice, "product")) input$arith_var1 else NULL,
+      prod_var2 = if (identical(arith_choice, "product")) input$arith_var2 else NULL,
+      create_indicator_feature = isTRUE(input$create_indicator_feature),
+      indicator_var = if (isTRUE(input$create_indicator_feature)) input$indicator_var else NULL,
+      indicator_threshold = thr,
+      create_missing_indicator = FALSE,
+      missing_var = NULL,
+      create_frequency_feature = FALSE,
+      freq_var = NULL,
+      create_group_mean_feature = isTRUE(input$create_group_mean_feature),
+      group_var = if (isTRUE(input$create_group_mean_feature)) input$group_var else NULL,
+      target_var = if (isTRUE(input$create_group_mean_feature)) input$target_var else NULL,
+      create_rank_feature = FALSE,
+      rank_var = NULL,
+      create_text_length = FALSE,
+      text_var = NULL
+    )
+    d <- append_post_pipeline_features(
+      d,
+      add_family_size = isTRUE(input$add_family_size),
+      add_log_time_price = isTRUE(input$add_log_time_price),
+      add_campaign_prev_ratio = isTRUE(input$add_campaign_prev_ratio)
+    )
+    feat_accum(d)
+    showNotification("Advanced options applied.", type = "message", duration = 2)
+  })
+
   output$cleaning_summary <- renderTable({
     req(raw_data(), cleaned_data())
     b <- raw_data()
@@ -1614,124 +1844,69 @@ server <- function(input, output, session) {
     cat("Rows:", nrow(cleaned_data()), " Columns:", ncol(cleaned_data()), "\n")
   })
 
-  output$date_var_ui <- renderUI({
-    req(cleaned_data())
-    if (!isTRUE(input$create_date_parts)) return(NULL)
-    df <- cleaned_data()
+  output$oct_col_ui <- renderUI({
+    df <- featured_data()
+    req(df)
     cols <- names(df)
-    if (length(cols) == 0) return(helpText("No columns."))
-    ti(selectInput("date_var", "Date column", choices = cols, selected = cols[1]), "Parsed with as.POSIXlt (UTC).")
+    if (length(cols) == 0) return(helpText("Run cleaning first, then load columns here."))
+    selectInput("oct_col", "Column", choices = cols, selected = cols[1])
   })
 
-  output$age_var_ui <- renderUI({
-    req(cleaned_data())
-    if (!isTRUE(input$create_age_group)) return(NULL)
-    df <- cleaned_data()
-    nm <- names(df)[sapply(df, is.numeric)]
-    if (length(nm) == 0) return(helpText("No numeric columns."))
-    sel <- if ("age" %in% nm) "age" else nm[1]
-    selectInput("age_var", "Age column", choices = nm, selected = sel)
+  output$dt_col_ui <- renderUI({
+    df <- featured_data()
+    req(df)
+    cols <- names(df)
+    if (length(cols) == 0) return(helpText("Run cleaning first."))
+    ti(
+      selectInput("dt_col", "Datetime column", choices = cols, selected = cols[1]),
+      "Parsed with as.POSIXlt (UTC). Check only the parts you want."
+    )
   })
 
-  output$balance_var_ui <- renderUI({
+  output$banding_var_ui <- renderUI({
     req(cleaned_data())
-    if (!isTRUE(input$create_balance_level)) return(NULL)
-    df <- cleaned_data()
+    choice <- if (is.null(input$banding_feature)) "none" else input$banding_feature
+    if (identical(choice, "none")) return(NULL)
+    df <- featured_data()
     nm <- names(df)[sapply(df, is.numeric)]
     if (length(nm) == 0) return(helpText("No numeric columns."))
+    if (identical(choice, "age_group")) {
+      sel <- if ("age" %in% nm) "age" else nm[1]
+      return(selectInput("banding_var", "Age column", choices = nm, selected = sel))
+    }
     sel <- if ("balance" %in% nm) "balance" else nm[1]
-    selectInput("balance_var", "Balance column", choices = nm, selected = sel)
+    selectInput("banding_var", "Balance column", choices = nm, selected = sel)
   })
 
   output$pdays_var_ui <- renderUI({
     req(cleaned_data())
     if (!isTRUE(input$create_contacted_before)) return(NULL)
-    df <- cleaned_data()
+    df <- featured_data()
     nm <- names(df)[sapply(df, is.numeric)]
     if (length(nm) == 0) return(helpText("No numeric columns."))
     sel <- if ("pdays" %in% nm) "pdays" else nm[1]
     selectInput("pdays_var", "pdays column", choices = nm, selected = sel)
   })
 
-  output$log_var_ui <- renderUI({
+  output$arith_vars_ui <- renderUI({
     req(cleaned_data())
-    if (!isTRUE(input$create_log_feature)) return(NULL)
-    df <- cleaned_data()
-    nm <- names(df)[sapply(df, is.numeric)]
-    if (length(nm) == 0) return(helpText("No numeric columns."))
-    selectInput("log_var", "Column for log1p", choices = nm, selected = nm[1])
-  })
-
-  output$sqrt_var_ui <- renderUI({
-    req(cleaned_data())
-    if (!isTRUE(input$create_sqrt_feature)) return(NULL)
-    df <- cleaned_data()
-    nm <- names(df)[sapply(df, is.numeric)]
-    if (length(nm) == 0) return(helpText("No numeric columns."))
-    selectInput("sqrt_var", "Column for sqrt", choices = nm, selected = nm[1])
-  })
-
-  output$square_var_ui <- renderUI({
-    req(cleaned_data())
-    if (!isTRUE(input$create_square_feature)) return(NULL)
-    df <- cleaned_data()
-    nm <- names(df)[sapply(df, is.numeric)]
-    if (length(nm) == 0) return(helpText("No numeric columns."))
-    selectInput("square_var", "Column to square", choices = nm, selected = nm[1])
-  })
-
-  output$ratio_vars_ui <- renderUI({
-    req(cleaned_data())
-    if (!isTRUE(input$create_ratio_feature)) return(NULL)
-    df <- cleaned_data()
+    if (is.null(input$arith_feature) || identical(input$arith_feature, "none")) return(NULL)
+    df <- featured_data()
     nm <- names(df)[sapply(df, is.numeric)]
     if (length(nm) < 2) return(helpText("Need ≥2 numeric columns."))
+    second_sel <- if (length(nm) >= 2) nm[2] else nm[1]
+    first_label <- if (identical(input$arith_feature, "ratio")) "Numerator" else "Column A"
+    second_label <- if (identical(input$arith_feature, "ratio")) "Denominator" else "Column B"
     tagList(
-      selectInput("ratio_num", "Numerator", choices = nm, selected = nm[1]),
-      selectInput("ratio_den", "Denominator", choices = nm, selected = nm[2])
-    )
-  })
-
-  output$sum_vars_ui <- renderUI({
-    req(cleaned_data())
-    if (!isTRUE(input$create_sum_feature)) return(NULL)
-    df <- cleaned_data()
-    nm <- names(df)[sapply(df, is.numeric)]
-    if (length(nm) < 2) return(helpText("Need ≥2 numeric columns."))
-    tagList(
-      selectInput("sum_var1", "Sum: column A", choices = nm, selected = nm[1]),
-      selectInput("sum_var2", "Sum: column B", choices = nm, selected = nm[2])
-    )
-  })
-
-  output$diff_vars_ui <- renderUI({
-    req(cleaned_data())
-    if (!isTRUE(input$create_diff_feature)) return(NULL)
-    df <- cleaned_data()
-    nm <- names(df)[sapply(df, is.numeric)]
-    if (length(nm) < 2) return(helpText("Need ≥2 numeric columns."))
-    tagList(
-      selectInput("diff_var1", "Difference: A", choices = nm, selected = nm[1]),
-      selectInput("diff_var2", "Difference: B", choices = nm, selected = nm[2])
-    )
-  })
-
-  output$prod_vars_ui <- renderUI({
-    req(cleaned_data())
-    if (!isTRUE(input$create_product_feature)) return(NULL)
-    df <- cleaned_data()
-    nm <- names(df)[sapply(df, is.numeric)]
-    if (length(nm) < 2) return(helpText("Need ≥2 numeric columns."))
-    tagList(
-      selectInput("prod_var1", "Product: A", choices = nm, selected = nm[1]),
-      selectInput("prod_var2", "Product: B", choices = nm, selected = nm[2])
+      selectInput("arith_var1", first_label, choices = nm, selected = nm[1]),
+      selectInput("arith_var2", second_label, choices = nm, selected = second_sel)
     )
   })
 
   output$indicator_var_ui <- renderUI({
     req(cleaned_data())
     if (!isTRUE(input$create_indicator_feature)) return(NULL)
-    df <- cleaned_data()
+    df <- featured_data()
     nm <- names(df)[sapply(df, is.numeric)]
     if (length(nm) == 0) return(helpText("No numeric columns."))
     selectInput("indicator_var", "Numeric column", choices = nm, selected = nm[1])
@@ -1740,7 +1915,7 @@ server <- function(input, output, session) {
   output$indicator_threshold_ui <- renderUI({
     req(cleaned_data())
     if (!isTRUE(input$create_indicator_feature)) return(NULL)
-    df <- cleaned_data()
+    df <- featured_data()
     nm <- names(df)[sapply(df, is.numeric)]
     if (length(nm) == 0) return(NULL)
     iv <- if (!is.null(input$indicator_var) && input$indicator_var %in% names(df)) input$indicator_var else nm[1]
@@ -1750,28 +1925,10 @@ server <- function(input, output, session) {
     numericInput("indicator_threshold", "Threshold", value = md, step = (max(xs) - min(xs)) / 100)
   })
 
-  output$missing_var_ui <- renderUI({
-    req(cleaned_data())
-    if (!isTRUE(input$create_missing_indicator)) return(NULL)
-    df <- cleaned_data()
-    cols <- names(df)
-    if (length(cols) == 0) return(helpText("No columns."))
-    selectInput("missing_var", "Column for NA indicator", choices = cols, selected = cols[1])
-  })
-
-  output$freq_var_ui <- renderUI({
-    req(cleaned_data())
-    if (!isTRUE(input$create_frequency_feature)) return(NULL)
-    df <- cleaned_data()
-    cols <- names(df)
-    if (length(cols) == 0) return(helpText("No columns."))
-    selectInput("freq_var", "Column for frequencies", choices = cols, selected = cols[1])
-  })
-
   output$group_var_ui <- renderUI({
     req(cleaned_data())
     if (!isTRUE(input$create_group_mean_feature)) return(NULL)
-    df <- cleaned_data()
+    df <- featured_data()
     cols <- names(df)
     if (length(cols) == 0) return(helpText("No columns."))
     selectInput("group_var", "Group column", choices = cols, selected = cols[1])
@@ -1780,88 +1937,11 @@ server <- function(input, output, session) {
   output$target_var_ui <- renderUI({
     req(cleaned_data())
     if (!isTRUE(input$create_group_mean_feature)) return(NULL)
-    df <- cleaned_data()
+    df <- featured_data()
     nm <- names(df)[sapply(df, is.numeric)]
     if (length(nm) == 0) return(helpText("No numeric target column."))
     selectInput("target_var", "Numeric target (mean by group)", choices = nm, selected = nm[1])
   })
-
-  output$rank_var_ui <- renderUI({
-    req(cleaned_data())
-    if (!isTRUE(input$create_rank_feature)) return(NULL)
-    df <- cleaned_data()
-    nm <- names(df)[sapply(df, is.numeric)]
-    if (length(nm) == 0) return(helpText("No numeric columns."))
-    selectInput("rank_var", "Column to rank", choices = nm, selected = nm[1])
-  })
-
-  output$text_var_ui <- renderUI({
-    req(cleaned_data())
-    if (!isTRUE(input$create_text_length)) return(NULL)
-    df <- cleaned_data()
-    cols <- names(df)
-    if (length(cols) == 0) return(helpText("No columns."))
-    selectInput("text_var", "Text column", choices = cols, selected = cols[1])
-  })
-
-  # Recompute engineered features whenever cleaning or "Apply features" is clicked
-  featured_data <- eventReactive(c(input$clean_btn, input$feat_btn), {
-    req(cleaned_data())
-    base <- cleaned_data()
-    thr <- NULL
-    if (isTRUE(input$create_indicator_feature) && !is.null(input$indicator_threshold)) {
-      thr <- suppressWarnings(as.numeric(input$indicator_threshold))
-    }
-    d <- feature_engineering_pipeline(
-      base,
-      create_date_parts = isTRUE(input$create_date_parts),
-      date_var = if (isTRUE(input$create_date_parts)) input$date_var else NULL,
-      create_age_group = isTRUE(input$create_age_group),
-      age_var = if (isTRUE(input$create_age_group)) input$age_var else NULL,
-      create_balance_level = isTRUE(input$create_balance_level),
-      balance_var = if (isTRUE(input$create_balance_level)) input$balance_var else NULL,
-      create_contacted_before = isTRUE(input$create_contacted_before),
-      pdays_var = if (isTRUE(input$create_contacted_before)) input$pdays_var else NULL,
-      create_log_feature = isTRUE(input$create_log_feature),
-      log_var = if (isTRUE(input$create_log_feature)) input$log_var else NULL,
-      create_sqrt_feature = isTRUE(input$create_sqrt_feature),
-      sqrt_var = if (isTRUE(input$create_sqrt_feature)) input$sqrt_var else NULL,
-      create_square_feature = isTRUE(input$create_square_feature),
-      square_var = if (isTRUE(input$create_square_feature)) input$square_var else NULL,
-      create_ratio_feature = isTRUE(input$create_ratio_feature),
-      ratio_num = if (isTRUE(input$create_ratio_feature)) input$ratio_num else NULL,
-      ratio_den = if (isTRUE(input$create_ratio_feature)) input$ratio_den else NULL,
-      create_sum_feature = isTRUE(input$create_sum_feature),
-      sum_var1 = if (isTRUE(input$create_sum_feature)) input$sum_var1 else NULL,
-      sum_var2 = if (isTRUE(input$create_sum_feature)) input$sum_var2 else NULL,
-      create_diff_feature = isTRUE(input$create_diff_feature),
-      diff_var1 = if (isTRUE(input$create_diff_feature)) input$diff_var1 else NULL,
-      diff_var2 = if (isTRUE(input$create_diff_feature)) input$diff_var2 else NULL,
-      create_product_feature = isTRUE(input$create_product_feature),
-      prod_var1 = if (isTRUE(input$create_product_feature)) input$prod_var1 else NULL,
-      prod_var2 = if (isTRUE(input$create_product_feature)) input$prod_var2 else NULL,
-      create_indicator_feature = isTRUE(input$create_indicator_feature),
-      indicator_var = if (isTRUE(input$create_indicator_feature)) input$indicator_var else NULL,
-      indicator_threshold = thr,
-      create_missing_indicator = isTRUE(input$create_missing_indicator),
-      missing_var = if (isTRUE(input$create_missing_indicator)) input$missing_var else NULL,
-      create_frequency_feature = isTRUE(input$create_frequency_feature),
-      freq_var = if (isTRUE(input$create_frequency_feature)) input$freq_var else NULL,
-      create_group_mean_feature = isTRUE(input$create_group_mean_feature),
-      group_var = if (isTRUE(input$create_group_mean_feature)) input$group_var else NULL,
-      target_var = if (isTRUE(input$create_group_mean_feature)) input$target_var else NULL,
-      create_rank_feature = isTRUE(input$create_rank_feature),
-      rank_var = if (isTRUE(input$create_rank_feature)) input$rank_var else NULL,
-      create_text_length = isTRUE(input$create_text_length),
-      text_var = if (isTRUE(input$create_text_length)) input$text_var else NULL
-    )
-    append_post_pipeline_features(
-      d,
-      add_family_size = isTRUE(input$add_family_size),
-      add_log_time_price = isTRUE(input$add_log_time_price),
-      add_campaign_prev_ratio = isTRUE(input$add_campaign_prev_ratio)
-    )
-  }, ignoreNULL = TRUE)
 
   last_feat_digest <- reactiveVal(NULL)
   observeEvent(featured_data(), {
