@@ -38,8 +38,8 @@ The browser window title is **“ADS Project 2”**.
 |-----|----------------|
 | **Guide** | Short overview of the pipeline and controls. |
 | **Upload & preview** | Load data from a file or from built-ins; dataset snapshot, preview, column types & missingness, `summary()`. |
-| **Cleaning** | Placeholders → NA, numeric coercion, sparse columns, missing-value strategies, duplicates, **id + position** handling for chart-style rows, IQR outliers, z-score scaling, optional label encoding. |
-| **Features** | Large **feature engineering** menu (dates, bins, logs, ratios, ranks, group means, Titanic/bank shortcuts, etc.); preview and distribution of first new column. |
+| **Cleaning** | Placeholders → NA, numeric coercion, sparse columns, missing-value strategies (global or **column-specific rules**), duplicates, **id + position** handling for chart-style rows, IQR outliers, z-score scaling, optional label encoding. |
+| **Features** | Dropdown-driven feature engineering: **Datetime extraction** uses a multi-select of parts; **Advanced** uses a single feature dropdown with dynamically shown column/threshold selectors (e.g., age bands/balance levels, ratio/sum/diff/product, indicator, group mean). |
 | **EDA** | **Apply EDA** applies filters (hit, year, optional numeric range, optional category level) and refreshes tables and charts. Numeric **describe**-style summary, missingness table, **Pearson correlation matrix** (table), Plotly plots (histogram, scatter with optional group/color, boxplot, bar counts, correlation heatmap). |
 | **Export** | Download cleaned and **featured** CSVs (UTF-8). |
 

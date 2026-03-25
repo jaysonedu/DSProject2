@@ -714,9 +714,9 @@ apply_one_click_transform <- function(df, col, method) {
 }
 
 extract_datetime_selected <- function(df, col, year, month, day, weekday, quarter) {
-  df <- as.data.frame(df, check.names = FALSE)
   if (!col %in% names(df)) return(df)
   if (!isTRUE(year) && !isTRUE(month) && !isTRUE(day) && !isTRUE(weekday) && !isTRUE(quarter)) return(df)
+  df <- as.data.frame(df, check.names = FALSE)
   dt_raw <- suppressWarnings(as.POSIXlt(as.character(df[[col]]), tz = "UTC"))
   if (all(is.na(as.POSIXct(dt_raw)))) return(df)
   d_date <- as.Date(dt_raw)
@@ -1942,16 +1942,36 @@ server <- function(input, output, session) {
     req(cleaned_data(), input$dt_col)
     base <- if (is.null(isolate(feat_accum()))) cleaned_data() else isolate(feat_accum())
     shiny::validate(shiny::need(input$dt_col %in% names(base), "Choose a datetime column."))
-    out <- extract_datetime_selected(
-      base,
-      input$dt_col,
+    parts <- c(
       year = isTRUE(input$dt_ext_year),
       month = isTRUE(input$dt_ext_month),
       day = isTRUE(input$dt_ext_day),
       weekday = isTRUE(input$dt_ext_weekday),
       quarter = isTRUE(input$dt_ext_quarter)
     )
-    if (identical(out, base)) {
+    if (!any(parts)) {
+      showNotification("Select at least one Extract option (year/month/day/weekday/quarter).", type = "warning", duration = 4)
+      return(invisible(NULL))
+    }
+
+    out <- tryCatch(
+      extract_datetime_selected(
+        base,
+        input$dt_col,
+        year = isTRUE(parts[["year"]]),
+        month = isTRUE(parts[["month"]]),
+        day = isTRUE(parts[["day"]]),
+        weekday = isTRUE(parts[["weekday"]]),
+        quarter = isTRUE(parts[["quarter"]])
+      ),
+      error = function(e) {
+        showNotification(paste0("Datetime extraction failed: ", conditionMessage(e)), type = "error", duration = 6)
+        return(base)
+      }
+    )
+
+    new_cols <- setdiff(names(out), names(base))
+    if (length(new_cols) == 0) {
       showNotification("No datetime parts added (check parsing or select at least one Extract option).", type = "warning", duration = 4)
       return(invisible(NULL))
     }
