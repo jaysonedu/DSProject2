@@ -666,30 +666,83 @@ feature_engineering_pipeline <- function(
 
 apply_one_click_transform <- function(df, col, method) {
   df <- as.data.frame(df, check.names = FALSE)
-  if (!col %in% names(df)) return(df)
+  nm0 <- names(df)
+  msg <- NULL
+
+  if (!col %in% names(df)) {
+    return(list(
+      df = df,
+      ok = FALSE,
+      message = paste0("Column \"", col, "\" is not in the current table.")
+    ))
+  }
+
   method <- match.arg(method, c(
     "log", "sqrt", "square", "rank", "missing", "text_length", "frequency", "zscore"
   ))
+
   switch(method,
     log = {
-      if (!is.numeric(df[[col]])) return(df)
-      x <- df[[col]]
-      ok <- stats::na.omit(x)
-      if (length(ok) && all(ok >= 0)) df[[paste0(col, "_log")]] <- log1p(x)
+      if (!is.numeric(df[[col]])) {
+        msg <- paste0(
+          "Log1p needs a numeric column. \"", col, "\" is ",
+          paste(class(df[[col]]), collapse = "/"), "."
+        )
+      } else {
+        x <- df[[col]]
+        okv <- stats::na.omit(x)
+        if (length(okv) == 0L) {
+          msg <- paste0("Cannot apply log1p to \"", col, "\": all values are NA.")
+        } else if (any(okv < 0)) {
+          msg <- paste0(
+            "Cannot apply log1p to \"", col,
+            "\": log1p(x) needs x >= 0 (after ignoring NA). This column has negative values."
+          )
+        } else {
+          df[[paste0(col, "_log")]] <- log1p(x)
+        }
+      }
     },
     sqrt = {
-      if (!is.numeric(df[[col]])) return(df)
-      x <- df[[col]]
-      ok <- stats::na.omit(x)
-      if (length(ok) && all(ok >= 0)) df[[paste0(col, "_sqrt")]] <- sqrt(x)
+      if (!is.numeric(df[[col]])) {
+        msg <- paste0(
+          "Square root needs a numeric column. \"", col, "\" is ",
+          paste(class(df[[col]]), collapse = "/"), "."
+        )
+      } else {
+        x <- df[[col]]
+        okv <- stats::na.omit(x)
+        if (length(okv) == 0L) {
+          msg <- paste0("Cannot apply sqrt to \"", col, "\": all values are NA.")
+        } else if (any(okv < 0)) {
+          msg <- paste0(
+            "Cannot apply sqrt to \"", col,
+            "\": square root needs values >= 0 (after ignoring NA). This column has negative values."
+          )
+        } else {
+          df[[paste0(col, "_sqrt")]] <- sqrt(x)
+        }
+      }
     },
     square = {
-      if (!is.numeric(df[[col]])) return(df)
-      df[[paste0(col, "_sq")]] <- df[[col]]^2
+      if (!is.numeric(df[[col]])) {
+        msg <- paste0(
+          "Squaring needs a numeric column. \"", col, "\" is ",
+          paste(class(df[[col]]), collapse = "/"), "."
+        )
+      } else {
+        df[[paste0(col, "_sq")]] <- df[[col]]^2
+      }
     },
     rank = {
-      if (!is.numeric(df[[col]])) return(df)
-      df[[paste0(col, "_rank")]] <- rank(df[[col]], ties.method = "average", na.last = "keep")
+      if (!is.numeric(df[[col]])) {
+        msg <- paste0(
+          "Rank needs a numeric column. \"", col, "\" is ",
+          paste(class(df[[col]]), collapse = "/"), "."
+        )
+      } else {
+        df[[paste0(col, "_rank")]] <- rank(df[[col]], ties.method = "average", na.last = "keep")
+      }
     },
     missing = {
       df[[paste0(col, "_missing")]] <- as.integer(is.na(df[[col]]))
@@ -704,21 +757,96 @@ apply_one_click_transform <- function(df, col, method) {
       df[[paste0(col, "_freq")]] <- cnt[match(fv, ux)]
     },
     zscore = {
-      if (!is.numeric(df[[col]])) return(df)
-      x <- df[[col]]
-      s <- stats::sd(x, na.rm = TRUE)
-      if (!is.na(s) && s > 0) df[[paste0(col, "_z")]] <- as.numeric(scale(x))
+      if (!is.numeric(df[[col]])) {
+        msg <- paste0(
+          "Z-score needs a numeric column. \"", col, "\" is ",
+          paste(class(df[[col]]), collapse = "/"), "."
+        )
+      } else {
+        x <- df[[col]]
+        s <- stats::sd(x, na.rm = TRUE)
+        if (is.na(s)) {
+          msg <- paste0("Cannot z-score \"", col, "\": could not compute SD (no usable numeric values).")
+        } else if (s == 0) {
+          msg <- paste0("Cannot z-score \"", col, "\": column is constant (SD = 0).")
+        } else {
+          df[[paste0(col, "_z")]] <- as.numeric(scale(x))
+        }
+      }
     }
   )
-  as.data.frame(df, check.names = FALSE)
+
+  out <- as.data.frame(df, check.names = FALSE)
+  added <- setdiff(names(out), nm0)
+  list(
+    df = out,
+    ok = length(added) > 0L,
+    message = if (length(added) > 0L) {
+      NULL
+    } else if (!is.null(msg) && nzchar(msg)) {
+      msg
+    } else {
+      paste0("Transform did not add a new column for \"", col, "\" (method: ", method, ").")
+    }
+  )
 }
 
 extract_datetime_selected <- function(df, col, year, month, day, weekday, quarter) {
-  if (!col %in% names(df)) return(df)
-  if (!isTRUE(year) && !isTRUE(month) && !isTRUE(day) && !isTRUE(weekday) && !isTRUE(quarter)) return(df)
   df <- as.data.frame(df, check.names = FALSE)
-  dt_raw <- suppressWarnings(as.POSIXlt(as.character(df[[col]]), tz = "UTC"))
-  if (all(is.na(as.POSIXct(dt_raw)))) return(df)
+  nm0 <- names(df)
+
+  if (!col %in% names(df)) {
+    return(list(
+      df = df,
+      ok = FALSE,
+      message = paste0("Column \"", col, "\" is not in the current table."),
+      added = character(0)
+    ))
+  }
+
+  if (!isTRUE(year) && !isTRUE(month) && !isTRUE(day) && !isTRUE(weekday) && !isTRUE(quarter)) {
+    return(list(
+      df = df,
+      ok = FALSE,
+      message = "Select at least one part to extract (year, month, day, weekday, quarter).",
+      added = character(0)
+    ))
+  }
+
+  raw <- df[[col]]
+  chr <- as.character(raw)
+  trim <- trimws(chr)
+  has_text <- !is.na(raw) & nzchar(trim)
+  n_nonempty <- sum(has_text)
+
+  dt_raw <- suppressWarnings(as.POSIXlt(chr, tz = "UTC"))
+  ok_time <- !is.na(as.POSIXct(dt_raw))
+
+  if (!any(ok_time)) {
+    if (n_nonempty == 0L) {
+      msg <- paste0(
+        "Cannot extract from \"", col, "\": all values are missing or blank. ",
+        "Pick a column that contains date/datetime text or coercible values."
+      )
+    } else {
+      ex <- head(unique(trim[has_text]), 5L)
+      msg <- paste0(
+        "Cannot parse \"", col, "\" as datetimes (using as.POSIXlt, UTC). ",
+        "Sample non-blank values: ", paste0("\"", ex, "\"", collapse = ", "), ". ",
+        "Try ISO-like strings (e.g. 2024-01-15, 2024-01-15 14:30:00), or standard English month-day-year formats."
+      )
+    }
+    return(list(df = df, ok = FALSE, message = msg, added = character(0)))
+  }
+
+  n_fail <- sum(has_text & !ok_time)
+  if (n_fail > 0L) {
+    bad <- head(unique(trim[has_text & !ok_time]), 3L)
+    warn_tail <- paste0(" ", n_fail, " non-blank row(s) did not parse (examples: ", paste0("\"", bad, "\"", collapse = ", "), ").")
+  } else {
+    warn_tail <- ""
+  }
+
   d_date <- as.Date(dt_raw)
   mon <- dt_raw$mon + 1L
   if (isTRUE(year)) df[[paste0(col, "_year")]] <- dt_raw$year + 1900L
@@ -726,7 +854,15 @@ extract_datetime_selected <- function(df, col, year, month, day, weekday, quarte
   if (isTRUE(day)) df[[paste0(col, "_day")]] <- dt_raw$mday
   if (isTRUE(weekday)) df[[paste0(col, "_weekday")]] <- weekdays(d_date)
   if (isTRUE(quarter)) df[[paste0(col, "_quarter")]] <- as.integer((mon - 1L) %/% 3L + 1L)
-  as.data.frame(df, check.names = FALSE)
+
+  out <- as.data.frame(df, check.names = FALSE)
+  added <- setdiff(names(out), nm0)
+  list(
+    df = out,
+    ok = TRUE,
+    message = if (nzchar(warn_tail)) paste0("Partial parse on \"", col, "\":", warn_tail) else NULL,
+    added = added
+  )
 }
 
 dataset_info <- function(df) {
@@ -798,16 +934,6 @@ eda_numeric_describe_df <- function(df) {
 }
 
 apply_eda_filters <- function(df, inp) {
-  if ("hit" %in% names(df) && !is.null(inp$hit_filter) && length(inp$hit_filter) > 0) {
-    hf <- suppressWarnings(as.numeric(inp$hit_filter))
-    hf <- hf[!is.na(hf)]
-    if (length(hf) > 0) {
-      df <- df %>%
-        dplyr::mutate(.hitn = suppressWarnings(as.numeric(as.character(hit)))) %>%
-        dplyr::filter(.hitn %in% hf | is.na(.hitn)) %>%
-        dplyr::select(-.hitn)
-    }
-  }
   if ("year" %in% names(df) && !is.null(inp$year_range) && is.numeric(df$year)) {
     df <- df %>% dplyr::filter(year >= inp$year_range[1], year <= inp$year_range[2])
   }
@@ -1128,7 +1254,7 @@ ui <- page_navbar(
             column(4, guide_step_card(
               "4",
               "EDA (interactive)",
-              tags$p(class = "small mb-2", "Filters for hit, year, numeric range, and any categorical column."),
+              tags$p(class = "small mb-2", "Filters for year, numeric range, and any categorical column."),
               tags$p(class = "small mb-0", tags$strong("Plotly:"), " pan, zoom, hover — plus summaries & missingness tables.")
             )),
             column(4, guide_step_card(
@@ -1431,6 +1557,21 @@ ui <- page_navbar(
           bslib::accordion_panel(
             value = "feat_dt",
             title = "Datetime Extraction",
+            tags$p(
+              class = "small",
+              style = "color: rgba(255,255,255,.5); margin-bottom: .75rem;",
+              "Parser: ",
+              tags$code(style = "color:#d4d4d4;", "as.POSIXlt(as.character(x), tz = \"UTC\")"),
+              " — R’s usual date-time strings. Examples: ",
+              tags$code("2024-01-15"),
+              ", ",
+              tags$code("2024-01-15 14:30:00"),
+              ", or ",
+              tags$code("Jan 15, 2024"),
+              ". Time zone is fixed to ",
+              tags$strong("UTC"),
+              " for parsing; use a consistently formatted column for best results."
+            ),
             uiOutput("dt_col_ui"),
             tags$label(class = "form-label mb-1", style = "color:#a3a3a3;", "Extract"),
             checkboxInput("dt_ext_year", "Year", TRUE),
@@ -1439,6 +1580,29 @@ ui <- page_navbar(
             checkboxInput("dt_ext_weekday", "Weekday", TRUE),
             checkboxInput("dt_ext_quarter", "Quarter", TRUE),
             actionButton("dt_extract_btn", "Extract", class = "btn-primary w-100")
+          ),
+          bslib::accordion_panel(
+            value = "feat_arith",
+            title = "Two-column arithmetic",
+            tags$p(
+              class = "small",
+              style = "color: rgba(255,255,255,.5); margin-bottom: .75rem;",
+              "Combine two numeric columns (ratio, sum, difference, or product). Uses the current engineered table if you already applied other features."
+            ),
+            selectInput(
+              "arith_feature",
+              "Operation",
+              choices = c(
+                "None" = "none",
+                "Ratio of two numeric columns" = "ratio",
+                "Sum of two numeric columns" = "sum",
+                "Difference of two numeric columns" = "diff",
+                "Product of two numeric columns" = "product"
+              ),
+              selected = "none"
+            ),
+            uiOutput("arith_vars_ui"),
+            actionButton("arith_apply_btn", "Apply two-column feature", class = "btn-primary w-100")
           ),
           bslib::accordion_panel(
             value = "feat_adv",
@@ -1469,20 +1633,6 @@ ui <- page_navbar(
             uiOutput("banding_var_ui"),
             ti(checkboxInput("create_contacted_before", "contacted_before from pdays", FALSE), ""),
             uiOutput("pdays_var_ui"),
-            tags$hr(),
-            selectInput(
-              "arith_feature",
-              "Two-column arithmetic",
-              choices = c(
-                "None" = "none",
-                "Ratio of two numeric columns" = "ratio",
-                "Sum of two numeric columns" = "sum",
-                "Difference of two numeric columns" = "diff",
-                "Product of two numeric columns" = "product"
-              ),
-              selected = "none"
-            ),
-            uiOutput("arith_vars_ui"),
             tags$hr(),
             ti(checkboxInput("create_indicator_feature", "Indicator: 1 if value > threshold", FALSE), ""),
             uiOutput("indicator_var_ui"),
@@ -1534,8 +1684,6 @@ ui <- page_navbar(
       sidebarPanel(
         width = 3,
         tags$div(class = "section-pill", "Filters"),
-        uiOutput("hit_filter_ui"),
-        tags$hr(),
         uiOutput("year_filter_ui"),
         tags$hr(),
         uiOutput("numeric_filter_var_ui"),
@@ -1559,17 +1707,18 @@ ui <- page_navbar(
             choices = c(
               "Histogram" = "hist",
               "Scatter" = "scatter",
+              "1×1 compare (two histograms)" = "compare",
               "Boxplot" = "box",
               "Bar chart (counts)" = "bar",
               "Correlation heatmap" = "corr"
             ),
             selected = "hist"
           ),
-          "Bar chart needs a categorical column; correlation heatmap needs 2+ numeric columns."
+          "Bar chart needs a categorical column; correlation heatmap needs 2+ numeric columns. 1×1 compare uses X and Y for side-by-side distributions."
         ),
         ti(
           sliderInput("hist_bins", "Histogram bins", min = 5, max = 80, value = 30),
-          "Bins for the histogram only."
+          "Bins for histogram and 1×1 compare plots."
         ),
         uiOutput("xvar_ui"),
         uiOutput("yvar_ui"),
@@ -1929,12 +2078,16 @@ server <- function(input, output, session) {
     req(cleaned_data(), input$oct_col, input$oct_method)
     base <- if (is.null(isolate(feat_accum()))) cleaned_data() else isolate(feat_accum())
     shiny::validate(shiny::need(input$oct_col %in% names(base), "Choose a valid column."))
-    out <- apply_one_click_transform(base, input$oct_col, input$oct_method)
-    if (identical(out, base)) {
-      showNotification("Transform could not be applied (check column type vs method).", type = "warning", duration = 4)
+    res <- apply_one_click_transform(base, input$oct_col, input$oct_method)
+    if (!isTRUE(res$ok)) {
+      showNotification(
+        if (!is.null(res$message) && nzchar(res$message)) res$message else "Transform could not be applied.",
+        type = "warning",
+        duration = 7
+      )
       return(invisible(NULL))
     }
-    feat_accum(out)
+    feat_accum(res$df)
     showNotification("Transform applied.", type = "message", duration = 2)
   })
 
@@ -1954,7 +2107,7 @@ server <- function(input, output, session) {
       return(invisible(NULL))
     }
 
-    out <- tryCatch(
+    res <- tryCatch(
       extract_datetime_selected(
         base,
         input$dt_col,
@@ -1965,25 +2118,132 @@ server <- function(input, output, session) {
         quarter = isTRUE(parts[["quarter"]])
       ),
       error = function(e) {
-        showNotification(paste0("Datetime extraction failed: ", conditionMessage(e)), type = "error", duration = 6)
-        return(base)
+        list(
+          df = base,
+          ok = FALSE,
+          message = paste0("Datetime extraction failed: ", conditionMessage(e)),
+          added = character(0)
+        )
       }
     )
 
-    new_cols <- setdiff(names(out), names(base))
-    if (length(new_cols) == 0) {
-      showNotification("No datetime parts added (check parsing or select at least one Extract option).", type = "warning", duration = 4)
+    if (!isTRUE(res$ok)) {
+      showNotification(
+        if (!is.null(res$message) && nzchar(res$message)) res$message else "Datetime extraction did not run.",
+        type = "warning",
+        duration = 9
+      )
       return(invisible(NULL))
     }
-    feat_accum(out)
-    showNotification("Datetime features extracted.", type = "message", duration = 2)
+
+    feat_accum(res$df)
+
+    if (!is.null(res$message) && nzchar(res$message)) {
+      showNotification(paste("Datetime features extracted.", res$message), type = "warning", duration = 8)
+    } else if (length(res$added) > 0L) {
+      showNotification(
+        paste("Datetime features added:", paste(res$added, collapse = ", ")),
+        type = "message",
+        duration = 4
+      )
+    } else {
+      showNotification(
+        "Datetime features updated (columns like _year/_month already existed; values refreshed).",
+        type = "message",
+        duration = 4
+      )
+    }
+  })
+
+  observeEvent(input$arith_apply_btn, {
+    req(cleaned_data())
+    k <- if (is.null(input$arith_feature)) "none" else input$arith_feature
+    if (identical(k, "none")) {
+      showNotification("Select an operation (ratio, sum, difference, or product).", type = "warning", duration = 3)
+      return(invisible(NULL))
+    }
+    base <- if (is.null(isolate(feat_accum()))) cleaned_data() else isolate(feat_accum())
+    shiny::validate(shiny::need(!is.null(input$arith_var1) && !is.null(input$arith_var2), "Choose both columns"))
+    shiny::validate(shiny::need(input$arith_var1 %in% names(base) && input$arith_var2 %in% names(base), "Invalid column choice"))
+    v1 <- input$arith_var1
+    v2 <- input$arith_var2
+    if (!is.numeric(base[[v1]]) || !is.numeric(base[[v2]])) {
+      bad <- character(0)
+      if (!is.numeric(base[[v1]])) bad <- c(bad, paste0("\"", v1, "\" (", class(base[[v1]])[1], ")"))
+      if (!is.numeric(base[[v2]])) bad <- c(bad, paste0("\"", v2, "\" (", class(base[[v2]])[1], ")"))
+      showNotification(
+        paste0("Two-column arithmetic needs two numeric columns. Non-numeric: ", paste(bad, collapse = ", "), "."),
+        type = "warning",
+        duration = 7
+      )
+      return(invisible(NULL))
+    }
+    d <- feature_engineering_pipeline(
+      base,
+      create_date_parts = FALSE,
+      date_var = NULL,
+      create_age_group = FALSE,
+      age_var = NULL,
+      create_balance_level = FALSE,
+      balance_var = NULL,
+      create_contacted_before = FALSE,
+      pdays_var = NULL,
+      create_log_feature = FALSE,
+      log_var = NULL,
+      create_sqrt_feature = FALSE,
+      sqrt_var = NULL,
+      create_square_feature = FALSE,
+      square_var = NULL,
+      create_ratio_feature = identical(k, "ratio"),
+      ratio_num = if (identical(k, "ratio")) input$arith_var1 else NULL,
+      ratio_den = if (identical(k, "ratio")) input$arith_var2 else NULL,
+      create_sum_feature = identical(k, "sum"),
+      sum_var1 = if (identical(k, "sum")) input$arith_var1 else NULL,
+      sum_var2 = if (identical(k, "sum")) input$arith_var2 else NULL,
+      create_diff_feature = identical(k, "diff"),
+      diff_var1 = if (identical(k, "diff")) input$arith_var1 else NULL,
+      diff_var2 = if (identical(k, "diff")) input$arith_var2 else NULL,
+      create_product_feature = identical(k, "product"),
+      prod_var1 = if (identical(k, "product")) input$arith_var1 else NULL,
+      prod_var2 = if (identical(k, "product")) input$arith_var2 else NULL,
+      create_indicator_feature = FALSE,
+      indicator_var = NULL,
+      indicator_threshold = NULL,
+      create_missing_indicator = FALSE,
+      missing_var = NULL,
+      create_frequency_feature = FALSE,
+      freq_var = NULL,
+      create_group_mean_feature = FALSE,
+      group_var = NULL,
+      target_var = NULL,
+      create_rank_feature = FALSE,
+      rank_var = NULL,
+      create_text_length = FALSE,
+      text_var = NULL
+    )
+    newc <- setdiff(names(d), names(base))
+    if (length(newc) == 0) {
+      op_lab <- switch(k,
+        ratio = "ratio", sum = "sum", diff = "difference", product = "product", k
+      )
+      showNotification(
+        paste0(
+          "No new column was added for ", op_lab, ". ",
+          "Pick two different numeric columns, or check that the derived name does not already exist."
+        ),
+        type = "warning",
+        duration = 7
+      )
+      return(invisible(NULL))
+    }
+    feat_accum(d)
+    showNotification("Two-column feature applied.", type = "message", duration = 2)
   })
 
   observeEvent(input$feat_btn, {
     req(cleaned_data())
     base <- if (is.null(isolate(feat_accum()))) cleaned_data() else isolate(feat_accum())
     banding_choice <- if (is.null(input$banding_feature)) "none" else input$banding_feature
-    arith_choice <- if (is.null(input$arith_feature)) "none" else input$arith_feature
     thr <- NULL
     if (isTRUE(input$create_indicator_feature) && !is.null(input$indicator_threshold)) {
       thr <- suppressWarnings(as.numeric(input$indicator_threshold))
@@ -2004,18 +2264,18 @@ server <- function(input, output, session) {
       sqrt_var = NULL,
       create_square_feature = FALSE,
       square_var = NULL,
-      create_ratio_feature = identical(arith_choice, "ratio"),
-      ratio_num = if (identical(arith_choice, "ratio")) input$arith_var1 else NULL,
-      ratio_den = if (identical(arith_choice, "ratio")) input$arith_var2 else NULL,
-      create_sum_feature = identical(arith_choice, "sum"),
-      sum_var1 = if (identical(arith_choice, "sum")) input$arith_var1 else NULL,
-      sum_var2 = if (identical(arith_choice, "sum")) input$arith_var2 else NULL,
-      create_diff_feature = identical(arith_choice, "diff"),
-      diff_var1 = if (identical(arith_choice, "diff")) input$arith_var1 else NULL,
-      diff_var2 = if (identical(arith_choice, "diff")) input$arith_var2 else NULL,
-      create_product_feature = identical(arith_choice, "product"),
-      prod_var1 = if (identical(arith_choice, "product")) input$arith_var1 else NULL,
-      prod_var2 = if (identical(arith_choice, "product")) input$arith_var2 else NULL,
+      create_ratio_feature = FALSE,
+      ratio_num = NULL,
+      ratio_den = NULL,
+      create_sum_feature = FALSE,
+      sum_var1 = NULL,
+      sum_var2 = NULL,
+      create_diff_feature = FALSE,
+      diff_var1 = NULL,
+      diff_var2 = NULL,
+      create_product_feature = FALSE,
+      prod_var1 = NULL,
+      prod_var2 = NULL,
       create_indicator_feature = isTRUE(input$create_indicator_feature),
       indicator_var = if (isTRUE(input$create_indicator_feature)) input$indicator_var else NULL,
       indicator_threshold = thr,
@@ -2037,6 +2297,53 @@ server <- function(input, output, session) {
       add_log_time_price = isTRUE(input$add_log_time_price),
       add_campaign_prev_ratio = isTRUE(input$add_campaign_prev_ratio)
     )
+    newc <- setdiff(names(d), names(base))
+    if (length(newc) == 0L) {
+      hints <- character(0)
+      if (isTRUE(input$create_indicator_feature)) {
+        if (is.null(thr) || length(thr) == 0L || is.na(thr)) {
+          hints <- c(hints, "Indicator needs a valid numeric threshold.")
+        } else if (!is.null(input$indicator_var) && input$indicator_var %in% names(base) &&
+          !is.numeric(base[[input$indicator_var]])) {
+          hints <- c(hints, paste0("Indicator needs a numeric column; \"", input$indicator_var, "\" is not numeric."))
+        }
+      }
+      if (identical(banding_choice, "age_group") && !is.null(input$banding_var) &&
+        input$banding_var %in% names(base) && !is.numeric(base[[input$banding_var]])) {
+        hints <- c(hints, paste0("Age bands need a numeric column; \"", input$banding_var, "\" is not numeric."))
+      }
+      if (identical(banding_choice, "balance_level") && !is.null(input$banding_var) &&
+        input$banding_var %in% names(base) && !is.numeric(base[[input$banding_var]])) {
+        hints <- c(hints, paste0("Balance levels need a numeric column; \"", input$banding_var, "\" is not numeric."))
+      }
+      if (identical(banding_choice, "balance_level") && !is.null(input$banding_var) &&
+        input$banding_var %in% names(base) && is.numeric(base[[input$banding_var]])) {
+        x <- stats::na.omit(base[[input$banding_var]])
+        if (length(x) < 3L || length(unique(x)) < 3L) {
+          hints <- c(
+            hints,
+            paste0(
+              "Balance levels need at least three numeric values and three distinct values; \"",
+              input$banding_var, "\" has too few."
+            )
+          )
+        }
+      }
+      if (isTRUE(input$create_group_mean_feature)) {
+        if (!is.null(input$group_var) && input$group_var %in% names(base) &&
+          !is.null(input$target_var) && input$target_var %in% names(base) &&
+          !is.numeric(base[[input$target_var]])) {
+          hints <- c(
+            hints,
+            paste0("Group mean needs a numeric target; \"", input$target_var, "\" is not numeric.")
+          )
+        }
+      }
+      msg <- "No new columns were added."
+      if (length(hints) > 0L) msg <- paste(c(msg, hints), collapse = " ")
+      showNotification(msg, type = "warning", duration = 8)
+      return(invisible(NULL))
+    }
     feat_accum(d)
     showNotification("Advanced options applied.", type = "message", duration = 2)
   })
@@ -2098,7 +2405,10 @@ server <- function(input, output, session) {
     if (length(cols) == 0) return(helpText("Run cleaning first."))
     ti(
       selectInput("dt_col", "Datetime column", choices = cols, selected = cols[1]),
-      "Parsed with as.POSIXlt (UTC). Check only the parts you want."
+      paste(
+        "Column coerced with as.character, parsed via as.POSIXlt(..., tz = \"UTC\").",
+        "ISO-style dates (YYYY-MM-DD) and common English month-day-year text usually work."
+      )
     )
   })
 
@@ -2254,28 +2564,6 @@ server <- function(input, output, session) {
     names(featured_data())[sapply(featured_data(), function(x) is.character(x) || is.factor(x))]
   })
 
-  output$hit_filter_ui <- renderUI({
-    req(featured_data())
-    df <- featured_data()
-    if (!("hit" %in% names(df))) {
-      return(helpText("No binary `hit` column — boxplot uses another grouping variable below."))
-    }
-    uh <- sort(unique(stats::na.omit(suppressWarnings(as.numeric(as.character(df$hit))))))
-    if (length(uh) == 0) {
-      return(helpText("Column `hit` has no non-NA values to filter."))
-    }
-    ti(
-      selectInput(
-        "hit_filter",
-        "hit filter (values present in data)",
-        choices = uh,
-        selected = uh,
-        multiple = TRUE
-      ),
-      "Subset rows by outcome class. Leave both selected for all rows; empty selection shows all (no filter)."
-    )
-  })
-
   output$year_filter_ui <- renderUI({
     req(featured_data())
     df <- featured_data()
@@ -2336,10 +2624,17 @@ server <- function(input, output, session) {
     if (identical(input$plot_type, "bar")) return(NULL)
     vars <- numeric_vars()
     if (length(vars) == 0) return(helpText("No numeric columns to plot."))
-    ti(
-      selectInput("xvar", "X / numeric variable", choices = vars, selected = vars[1]),
+    lab <- if (identical(input$plot_type, "compare")) {
+      "X variable (first distribution)"
+    } else {
+      "X / numeric variable"
+    }
+    hint <- if (identical(input$plot_type, "compare")) {
+      "First variable in the side-by-side comparison (must differ from Y)."
+    } else {
       "Horizontal axis for scatter; numeric column for histogram and boxplot."
-    )
+    }
+    ti(selectInput("xvar", lab, choices = vars, selected = vars[1]), hint)
   })
 
   output$yvar_ui <- renderUI({
@@ -2350,6 +2645,12 @@ server <- function(input, output, session) {
       ti(
         selectInput("yvar", "Y variable", choices = vars, selected = sel),
         "Vertical axis for scatter plot (with optional regression line)."
+      )
+    } else if (identical(input$plot_type, "compare")) {
+      sel <- if (length(vars) >= 2) vars[min(2L, length(vars))] else vars[1]
+      ti(
+        selectInput("yvar", "Y variable (second distribution)", choices = vars, selected = sel),
+        "Second variable for the side-by-side histogram comparison."
       )
     } else NULL
   })
@@ -2490,7 +2791,7 @@ server <- function(input, output, session) {
     req(filtered())
     df <- filtered()
     pt <- input$plot_type
-    shiny::validate(shiny::need(pt %in% c("hist", "scatter", "box", "bar", "corr"), "Select plot type"))
+    shiny::validate(shiny::need(pt %in% c("hist", "scatter", "compare", "box", "bar", "corr"), "Select plot type"))
 
     if (pt == "hist") {
       req(input$xvar)
@@ -2538,6 +2839,30 @@ server <- function(input, output, session) {
         }
       }
       ggplotly(p) %>% layout(hovermode = "closest")
+    } else if (pt == "compare") {
+      req(input$xvar, input$yvar)
+      shiny::validate(shiny::need(input$xvar %in% names(df) && input$yvar %in% names(df), "Choose X and Y"))
+      shiny::validate(shiny::need(!identical(input$xvar, input$yvar), "Pick two different variables for 1×1 compare"))
+      shiny::validate(shiny::need(
+        is.numeric(df[[input$xvar]]) && is.numeric(df[[input$yvar]]),
+        "1×1 compare needs two numeric columns"
+      ))
+      bins <- input$hist_bins
+      d1 <- data.frame(v = df[[input$xvar]])
+      d2 <- data.frame(v = df[[input$yvar]])
+      p1 <- ggplot(d1, aes(x = v)) +
+        geom_histogram(fill = alpha("#a3a3a3", 0.88), color = alpha("#fafafa", 0.25), bins = bins) +
+        theme_minimal() +
+        labs(title = input$xvar, x = input$xvar, y = "Count")
+      p2 <- ggplot(d2, aes(x = v)) +
+        geom_histogram(fill = alpha("#737373", 0.88), color = alpha("#fafafa", 0.25), bins = bins) +
+        theme_minimal() +
+        labs(title = input$yvar, x = input$yvar, y = "Count")
+      plotly::subplot(ggplotly(p1), ggplotly(p2), nrows = 1L, titleX = TRUE, shareY = FALSE, margin = 0.06) %>%
+        plotly::layout(
+          title = paste("1×1 compare:", input$xvar, "vs", input$yvar),
+          hovermode = "closest"
+        )
     } else if (pt == "box") {
       req(input$xvar)
       shiny::validate(shiny::need(input$xvar %in% names(df), "Choose numeric variable"))
@@ -2621,9 +2946,18 @@ server <- function(input, output, session) {
       cat("Summary:", input$xvar, "\n")
       print(summary(df[[input$xvar]]))
     }
-    if (pt == "scatter" && !is.null(input$xvar) && !is.null(input$yvar) &&
-        input$xvar %in% names(df) && input$yvar %in% names(df)) {
-      cat("\nPearson r:\n")
+    if (pt == "compare" && !is.null(input$xvar) && !is.null(input$yvar) &&
+        input$xvar %in% names(df) && input$yvar %in% names(df) &&
+        is.numeric(df[[input$xvar]]) && is.numeric(df[[input$yvar]])) {
+      cat("Summary:", input$xvar, "\n")
+      print(summary(df[[input$xvar]]))
+      cat("\nSummary:", input$yvar, "\n")
+      print(summary(df[[input$yvar]]))
+    }
+    if (pt %in% c("scatter", "compare") && !is.null(input$xvar) && !is.null(input$yvar) &&
+        input$xvar %in% names(df) && input$yvar %in% names(df) &&
+        !identical(input$xvar, input$yvar)) {
+      cat("\nPearson r (", input$xvar, ", ", input$yvar, "):\n", sep = "")
       print(stats::cor(df[[input$xvar]], df[[input$yvar]], use = "pairwise.complete.obs"))
     }
   })

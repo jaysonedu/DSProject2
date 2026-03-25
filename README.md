@@ -39,8 +39,8 @@ The browser window title is **“ADS Project 2”**.
 | **Guide** | Short overview of the pipeline and controls. |
 | **Upload & preview** | Load data from a file or from built-ins; dataset snapshot, preview, column types & missingness, `summary()`. |
 | **Cleaning** | Placeholders → NA, numeric coercion, sparse columns, missing-value strategies (global or **column-specific rules**), duplicates, **id + position** handling for chart-style rows, IQR outliers, z-score scaling, optional label encoding. |
-| **Features** | Dropdown-driven feature engineering: **Datetime extraction** uses a multi-select of parts; **Advanced** uses a single feature dropdown with dynamically shown column/threshold selectors (e.g., age bands/balance levels, ratio/sum/diff/product, indicator, group mean). |
-| **EDA** | **Apply EDA** applies filters (hit, year, optional numeric range, optional category level) and refreshes tables and charts. Numeric **describe**-style summary, missingness table, **Pearson correlation matrix** (table), Plotly plots (histogram, scatter with optional group/color, boxplot, bar counts, correlation heatmap). |
+| **Features** | Accordion sections: one-click transforms, datetime extraction, **two-column arithmetic** (own panel), and advanced options (banding, pdays, indicator, group mean, shortcuts). |
+| **EDA** | **Apply EDA** applies filters (year, optional numeric range, optional category level) and refreshes tables and charts. Numeric **describe**-style summary, missingness table, **Pearson correlation matrix** (table), Plotly plots (histogram, scatter with optional group/color, boxplot, bar counts, correlation heatmap). |
 | **Export** | Download cleaned and **featured** CSVs (UTF-8). |
 
 ## Data sources
@@ -57,7 +57,7 @@ There is **no** synthetic/demo generator; both built-ins need the corresponding 
 ## Technical notes
 
 - **JSON**: Loaded by reading the file as UTF-8 text (avoids path/encoding edge cases), with optional BOM strip, single-key unwrapping (e.g. `{"data":[...]}`), and **JSON Lines** fallback.
-- **EDA behavior**: Matches the spirit of the reference Python app in `EDA.py` (filters + describe + missingness + correlation table + grouped scatter/boxplots), with extra R features (Plotly, `hit`/`year` filters, correlation heatmap). Until the first **Apply EDA** click, the EDA views use the full featured table; after that, filters refresh only when you click **Apply EDA** again.
+- **EDA behavior**: Matches the spirit of the reference Python app in `EDA.py` (filters + describe + missingness + correlation table + grouped scatter/boxplots), with extra R features (Plotly, year/numeric/category filters, correlation heatmap). Until the first **Apply EDA** click, the EDA views use the full featured table; after that, filters refresh only when you click **Apply EDA** again.
 - **Deployment** (e.g. [shinyapps.io](https://www.shinyapps.io)): use `rsconnect::deployApp()` with `appPrimaryDoc = "app.R"`. **Do not commit API tokens or secrets**; configure `rsconnect` via the documented account workflow or environment variables, not hard-coded keys in the repo.
 
 ## Repo layout
