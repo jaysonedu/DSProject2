@@ -276,7 +276,16 @@ clean_pipeline <- function(
     pdays_as_na = TRUE,
     coerce_numeric_flag = TRUE,
     missing_thr = 0.95,
-    missing_method = "Median impute numeric columns",
+    missing_method = "median_num",
+    use_column_missing_rules = FALSE,
+    missing_drop_cols = NULL,
+    missing_drop_rows_cols = NULL,
+    missing_median_cols = NULL,
+    missing_mean_cols = NULL,
+    missing_mode_cols = NULL,
+    missing_constant_cols = NULL,
+    missing_constant_value = "Missing",
+    missing_constant = "Missing",
     remove_dup_rows = FALSE,
     handle_dup_ids = TRUE,
     outlier_var = NULL,
@@ -313,53 +322,116 @@ clean_pipeline <- function(
     pos_col <- names(df)[match("position", lower_names)]
     df[[pos_col]] <- suppressWarnings(as.numeric(df[[pos_col]]))
 
-    bad_ids <- df %>%
-      filter(!is.na(.data[[id_col]]) & !is.na(.data[[pos_col]])) %>%
-      group_by(.data[[id_col]]) %>%
-      summarise(n_pos = dplyr::n_distinct(.data[[pos_col]]), .groups = "drop") %>%
-      filter(n_pos > 1) %>%
-      pull(.data[[id_col]])
+    df <- df %>%
+      dplyr::group_by(.data[[pos_col]]) %>%
+      dplyr::mutate(
+        !!id_col := ifelse(
+          is.na(.data[[id_col]]) | .data[[id_col]] == "",
+          safe_first_non_missing(.data[[id_col]]),
+          .data[[id_col]]
+        )
+      ) %>%
+      dplyr::ungroup()
 
-    if (length(bad_ids) > 0) df <- df %>% filter(!(.data[[id_col]] %in% bad_ids))
-
-    if (all(c("title", "artists", "year") %in% names(df))) {
-      missing_id <- is.na(df[[id_col]]) | df[[id_col]] == "NA"
-      key <- paste0(
-        ifelse(is.na(df$title), "", as.character(df$title)), "|",
-        ifelse(is.na(df$artists), "", as.character(df$artists)), "|",
-        ifelse(is.na(df$year), "", as.character(df$year))
-      )
-      df[[id_col]][missing_id] <- paste0("missing_", digest(key[missing_id], algo = "sha1"))
-    }
-
-    df <- df %>% dplyr::arrange(.data[[id_col]], .data[[pos_col]]) %>%
-      dplyr::distinct(.data[[id_col]], .keep_all = TRUE)
+    df <- df %>% dplyr::distinct(.data[[id_col]], .keep_all = TRUE)
   }
 
-  if (missing_method == "Remove rows with missing values") {
-    df <- stats::na.omit(df)
-  } else if (missing_method == "Median impute numeric columns") {
-    num_cols <- names(df)[sapply(df, is.numeric)]
-    for (nm in num_cols) {
-      med <- median(df[[nm]], na.rm = TRUE)
-      if (!is.na(med)) df[[nm]][is.na(df[[nm]])] <- med
+  missing_drop_cols <- if (is.null(missing_drop_cols)) character(0) else missing_drop_cols
+  missing_drop_rows_cols <- if (is.null(missing_drop_rows_cols)) character(0) else missing_drop_rows_cols
+  missing_median_cols <- if (is.null(missing_median_cols)) character(0) else missing_median_cols
+  missing_mean_cols <- if (is.null(missing_mean_cols)) character(0) else missing_mean_cols
+  missing_mode_cols <- if (is.null(missing_mode_cols)) character(0) else missing_mode_cols
+  missing_constant_cols <- if (is.null(missing_constant_cols)) character(0) else missing_constant_cols
+  missing_constant_value <- if (is.null(missing_constant_value)) "Missing" else missing_constant_value
+  missing_constant <- if (is.null(missing_constant)) "Missing" else missing_constant
+
+  # app5.R-style missing handling:
+  # - if use_column_missing_rules: per-column drop/impute/fill lists (unselected columns keep NA)
+  # - else: one global strategy using missing_method codes
+  if (isTRUE(use_column_missing_rules)) {
+    # 5a Drop selected columns
+    drop_cols <- intersect(missing_drop_cols, names(df))
+    if (length(drop_cols) > 0) df <- df[, setdiff(names(df), drop_cols), drop = FALSE]
+
+    # 5b Drop rows if selected columns contain missing values
+    drop_rows_cols <- intersect(missing_drop_rows_cols, names(df))
+    if (length(drop_rows_cols) > 0) {
+      keep_idx <- complete.cases(df[, drop_rows_cols, drop = FALSE])
+      df <- df[keep_idx, , drop = FALSE]
     }
-  } else if (missing_method == "Mean impute numeric columns") {
-    num_cols <- names(df)[sapply(df, is.numeric)]
-    for (nm in num_cols) {
-      mu <- mean(df[[nm]], na.rm = TRUE)
-      if (!is.na(mu)) df[[nm]][is.na(df[[nm]])] <- mu
+
+    # 5c Median impute selected numeric columns
+    median_cols <- intersect(missing_median_cols, names(df))
+    for (col in median_cols) {
+      if (col %in% names(df) && is.numeric(df[[col]]) && !all(is.na(df[[col]]))) {
+        df[[col]][is.na(df[[col]])] <- median(df[[col]], na.rm = TRUE)
+      }
     }
-  } else if (missing_method == "Mode impute categorical columns") {
-    cat_cols <- names(df)[sapply(df, function(x) is.character(x) || is.factor(x))]
-    for (nm in cat_cols) {
-      mv <- get_mode(df[[nm]])
-      df[[nm]][is.na(df[[nm]])] <- mv
+
+    # 5d Mean impute selected numeric columns
+    mean_cols <- intersect(missing_mean_cols, names(df))
+    for (col in mean_cols) {
+      if (col %in% names(df) && is.numeric(df[[col]]) && !all(is.na(df[[col]]))) {
+        df[[col]][is.na(df[[col]])] <- mean(df[[col]], na.rm = TRUE)
+      }
     }
-  } else if (missing_method == "Do nothing") {
-    cat_cols <- names(df)[sapply(df, function(x) is.character(x) || is.factor(x))]
-    for (nm in cat_cols) {
-      df[[nm]][is.na(df[[nm]])] <- "Unknown"
+
+    # 5e Mode impute selected categorical columns
+    mode_cols <- intersect(missing_mode_cols, names(df))
+    for (col in mode_cols) {
+      if (col %in% names(df) && (is.character(df[[col]]) || is.factor(df[[col]]))) {
+        mode_val <- get_mode(df[[col]])
+        if (!is.na(mode_val)) {
+          if (is.factor(df[[col]])) df[[col]] <- as.character(df[[col]])
+          df[[col]][is.na(df[[col]])] <- mode_val
+        }
+      }
+    }
+
+    # 5f Constant fill selected categorical columns
+    const_cols <- intersect(missing_constant_cols, names(df))
+    for (col in const_cols) {
+      if (col %in% names(df) && (is.character(df[[col]]) || is.factor(df[[col]]))) {
+        if (is.factor(df[[col]])) df[[col]] <- as.character(df[[col]])
+        df[[col]][is.na(df[[col]])] <- missing_constant_value
+      }
+    }
+    # Any unselected columns keep NA
+  } else {
+    # One global missing strategy
+    if (missing_method == "drop_rows") {
+      df <- stats::na.omit(df)
+    } else if (missing_method == "median_num") {
+      num_cols <- names(df)[sapply(df, is.numeric)]
+      for (nm in num_cols) {
+        med <- median(df[[nm]], na.rm = TRUE)
+        if (!is.na(med)) df[[nm]][is.na(df[[nm]])] <- med
+      }
+    } else if (missing_method == "mean_num") {
+      num_cols <- names(df)[sapply(df, is.numeric)]
+      for (nm in num_cols) {
+        mu <- mean(df[[nm]], na.rm = TRUE)
+        if (!is.na(mu)) df[[nm]][is.na(df[[nm]])] <- mu
+      }
+    } else if (missing_method == "mode_cat") {
+      cat_cols <- names(df)[sapply(df, function(x) is.character(x) || is.factor(x))]
+      for (nm in cat_cols) {
+        mv <- get_mode(df[[nm]])
+        if (!is.na(mv)) {
+          if (is.factor(df[[nm]])) df[[nm]] <- as.character(df[[nm]])
+          df[[nm]][is.na(df[[nm]])] <- mv
+        }
+      }
+    } else if (missing_method == "constant_cat") {
+      cat_cols <- names(df)[sapply(df, function(x) is.character(x) || is.factor(x))]
+      for (nm in cat_cols) {
+        if (is.factor(df[[nm]])) df[[nm]] <- as.character(df[[nm]])
+        df[[nm]][is.na(df[[nm]])] <- missing_constant
+      }
+    } else if (missing_method == "keep_na") {
+      # intentionally do nothing
+    } else {
+      # Unknown code => keep NA (safe default)
     }
   }
 
@@ -1199,19 +1271,44 @@ ui <- page_navbar(
           "Columns with more missing than this threshold are removed before imputation."
         ),
         ti(
-          selectInput(
-            "missing_method",
-            "Missing value strategy",
-            choices = c(
-              "Do nothing",
-              "Remove rows with missing values",
-              "Median impute numeric columns",
-              "Mean impute numeric columns",
-              "Mode impute categorical columns"
+          checkboxInput("use_column_missing_rules", "Use column-specific missing treatment", FALSE),
+          "If enabled, you can choose what to do for each column below."
+        ),
+        conditionalPanel(
+          condition = "input.use_column_missing_rules == false",
+          tagList(
+            selectInput(
+              "missing_method",
+              "Missing value strategy",
+              choices = c(
+                "Keep remaining missing values as NA" = "keep_na",
+                "Remove rows with missing values" = "drop_rows",
+                "Median impute numeric columns" = "median_num",
+                "Mean impute numeric columns" = "mean_num",
+                "Mode impute categorical columns" = "mode_cat",
+                "Fill categorical missing with constant value" = "constant_cat"
+              ),
+              selected = "median_num"
             ),
-            selected = "Median impute numeric columns"
-          ),
-          "How to fill or drop remaining missing values after sparse columns are removed."
+            conditionalPanel(
+              condition = "input.missing_method == 'constant_cat'",
+              textInput("missing_constant", "Constant value for categorical missing:", value = "Missing")
+            ),
+            "How to fill or drop remaining missing values after sparse columns are removed."
+          )
+        ),
+        conditionalPanel(
+          condition = "input.use_column_missing_rules == true",
+          tagList(
+            helpText("Select column-specific treatments below. Columns not selected will keep missing values as NA."),
+            uiOutput("missing_drop_cols_ui"),
+            uiOutput("missing_drop_rows_cols_ui"),
+            uiOutput("missing_median_cols_ui"),
+            uiOutput("missing_mean_cols_ui"),
+            uiOutput("missing_mode_cols_ui"),
+            uiOutput("missing_constant_cols_ui"),
+            textInput("missing_constant_value", "Constant value:", value = "Missing")
+          )
         ),
         tags$hr(),
         h5("Duplicates"),
@@ -1666,6 +1763,119 @@ server <- function(input, output, session) {
     )
   })
 
+  # Base-cleaned data used to populate the column-specific missing selectors.
+  # This mirrors the first stage of `clean_pipeline()` (standardize values + optional NA mapping + coerce + sparse-column drop),
+  # so the checkbox lists reflect what remains by the time we apply missing rules.
+  pre_missing_data <- reactive({
+    req(raw_data())
+    df <- raw_data()
+    df <- as.data.frame(df, check.names = FALSE)
+
+    df[] <- lapply(df, function(x) {
+      if (is.character(x)) {
+        x[x == "" | trimws(x) == ""] <- NA
+      }
+      x
+    })
+
+    if (isTRUE(input$unknown_as_na)) df <- clean_char_na(df)
+    if (isTRUE(input$coerce_numeric)) df <- coerce_numeric_if_possible(df)
+
+    if (isTRUE(input$pdays_as_na) && "pdays" %in% names(df) && is.numeric(df$pdays)) {
+      df$pdays[df$pdays == -1] <- NA
+    }
+
+    miss_rate <- sapply(df, function(x) mean(is.na(x)))
+    keep_cols <- names(miss_rate)[miss_rate <= input$missing_thr]
+    df <- df[, keep_cols, drop = FALSE]
+
+    as.data.frame(df, check.names = FALSE)
+  })
+
+  output$missing_drop_cols_ui <- renderUI({
+    req(pre_missing_data())
+    df <- pre_missing_data()
+    miss_cols <- names(df)[sapply(df, function(x) any(is.na(x)))]
+    if (length(miss_cols) == 0) {
+      return(helpText("No columns with remaining missing values are currently available."))
+    }
+    checkboxGroupInput(
+      "missing_drop_cols",
+      "Columns to drop:",
+      choices = miss_cols
+    )
+  })
+
+  output$missing_drop_rows_cols_ui <- renderUI({
+    req(pre_missing_data())
+    df <- pre_missing_data()
+    miss_cols <- names(df)[sapply(df, function(x) any(is.na(x)))]
+    if (length(miss_cols) == 0) {
+      return(helpText("No columns with remaining missing values available for row removal."))
+    }
+    checkboxGroupInput(
+      "missing_drop_rows_cols",
+      "Columns for row removal (drop rows if missing in selected columns):",
+      choices = miss_cols
+    )
+  })
+
+  output$missing_median_cols_ui <- renderUI({
+    req(pre_missing_data())
+    df <- pre_missing_data()
+    num_miss_cols <- names(df)[sapply(df, function(x) is.numeric(x) && any(is.na(x)))]
+    if (length(num_miss_cols) == 0) {
+      return(helpText("No numeric columns with missing values available for median imputation."))
+    }
+    checkboxGroupInput(
+      "missing_median_cols",
+      "Numeric columns for median imputation:",
+      choices = num_miss_cols
+    )
+  })
+
+  output$missing_mean_cols_ui <- renderUI({
+    req(pre_missing_data())
+    df <- pre_missing_data()
+    num_miss_cols <- names(df)[sapply(df, function(x) is.numeric(x) && any(is.na(x)))]
+    if (length(num_miss_cols) == 0) {
+      return(helpText("No numeric columns with missing values available for mean imputation."))
+    }
+    checkboxGroupInput(
+      "missing_mean_cols",
+      "Numeric columns for mean imputation:",
+      choices = num_miss_cols
+    )
+  })
+
+  output$missing_mode_cols_ui <- renderUI({
+    req(pre_missing_data())
+    df <- pre_missing_data()
+    cat_miss_cols <- names(df)[sapply(df, function(x) (is.character(x) || is.factor(x)) && any(is.na(x)))]
+    if (length(cat_miss_cols) == 0) {
+      return(helpText("No categorical columns with missing values available for mode imputation."))
+    }
+    checkboxGroupInput(
+      "missing_mode_cols",
+      "Categorical columns for mode imputation:",
+      choices = cat_miss_cols
+    )
+  })
+
+  output$missing_constant_cols_ui <- renderUI({
+    req(pre_missing_data())
+    df <- pre_missing_data()
+    cat_miss_cols <- names(df)[sapply(df, function(x) (is.character(x) || is.factor(x)) && any(is.na(x)))]
+    if (length(cat_miss_cols) == 0) {
+      return(helpText("No categorical columns with missing values available for constant fill."))
+    }
+    checkboxGroupInput(
+      "missing_constant_cols",
+      "Categorical columns for constant fill:",
+      choices = cat_miss_cols
+    )
+  })
+
   cleaned_data <- eventReactive(input$clean_btn, {
     req(raw_data())
     df <- raw_data()
@@ -1680,6 +1890,15 @@ server <- function(input, output, session) {
       coerce_numeric_flag = isTRUE(input$coerce_numeric),
       missing_thr = input$missing_thr,
       missing_method = input$missing_method,
+      use_column_missing_rules = isTRUE(input$use_column_missing_rules),
+      missing_drop_cols = input$missing_drop_cols,
+      missing_drop_rows_cols = input$missing_drop_rows_cols,
+      missing_median_cols = input$missing_median_cols,
+      missing_mean_cols = input$missing_mean_cols,
+      missing_mode_cols = input$missing_mode_cols,
+      missing_constant_cols = input$missing_constant_cols,
+      missing_constant_value = input$missing_constant_value,
+      missing_constant = input$missing_constant,
       remove_dup_rows = isTRUE(input$remove_dup_rows),
       handle_dup_ids = isTRUE(input$handle_dup_ids),
       outlier_var = ov,
